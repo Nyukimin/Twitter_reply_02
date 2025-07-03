@@ -34,16 +34,15 @@ MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）で�
 """ 
 
 THANK_YOU_PHRASES = {
-    "ja": "ありがとう❤️",
-    "en": "thanks❤️",
-    "es": "Gracias❤️",
-    "in": "Terima kasih❤️",
-    "pt": "Obrigada❤️",
-    "qme": "❤️",
-    "tr": "Teşekkürler❤️",
-    "und": "¿Y tú?❤️"
-    "fr": "Merci!❤️",
-    "de": "Danke schön!🩷",
-    "zh": "谢谢！❤️",
-    "ko": "감사합니다!🩷"
+    "en": ["thanks❤️", "thanks🩷", "thanks🧡", "thanks💛"],
+    "es": ["Gracias❤️", "Gracias🩷", "Gracias🧡", "Gracias💛"],
+    "in": ["Terima kasih❤️", "Terima kasih🩷", "Terima kasih🧡", "Terima kasih💛"],
+    "pt": ["Obrigada❤️", "Obrigada🩷", "Obrigada🧡", "Obrigada💛"],
+    "qme": ["❤️", "🩷", "🧡", "💛"],
+    "tr": ["Teşekkürler❤️", "Teşekkürler🩷", "Teşekkürler🧡", "Teşekkürler💛"],
+    "und": ["¿Y tú?❤️", "¿Y tú?🩷", "¿Y tú?🧡", "¿Y tú?💛"],
+    "fr": ["Merci!❤️", "Merci!🩷", "Merci!🧡", "Merci!💛"],
+    "de": ["Danke schön!❤️", "Danke schön!🩷", "Danke schön!🧡", "Danke schön!💛"],
+    "zh": ["谢谢！❤️", "谢谢！🩷", "谢谢！🧡", "谢谢！💛"],
+    "ko": ["감사합니다!❤️", "감사합니다!🩷", "감사합니다!��", "감사합니다!💛"]
 } 

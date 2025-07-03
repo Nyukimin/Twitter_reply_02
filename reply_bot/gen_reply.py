@@ -1,4 +1,5 @@
 import openai
+import random
 from .config import OPENAI_API_KEY, MAYA_PERSONALITY_PROMPT, THANK_YOU_PHRASES
 from .db import get_user_preference
 
@@ -20,10 +21,11 @@ def generate(reply_text: str, replier_id: str = None, lang: str = "en", original
     """
     # ja以外の言語の場合、固定の「ありがとう」メッセージを返す、または❤を返す
     if lang != "ja":
-        if lang in THANK_YOU_PHRASES:
-            return f"@{replier_id} {THANK_YOU_PHRASES[lang]}"
+        if lang in THANK_YOU_PHRASES and isinstance(THANK_YOU_PHRASES[lang], list):
+            selected_phrase = random.choice(THANK_YOU_PHRASES[lang])
+            return f"@{replier_id} {selected_phrase}"
         else:
-            return f"@{replier_id} ❤"
+            return f"@{replier_id} ❤️"
 
     # ユーザーの呼び名を取得（存在する場合）
     nickname = None

@@ -1,6 +1,7 @@
 import subprocess
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from .config import TARGET_USER
 
@@ -48,8 +49,13 @@ def fetch_replies(target_user: str) -> list[dict]:
     logging.info(f"snscrape コマンドを実行中: {' '.join(command)}")
 
     try:
+        # 環境変数 REQUESTS_CA_BUNDLE を一時的に空に設定してSSL検証を無効化
+        # これはセキュリティリスクを伴うため、デバッグ目的でのみ使用
+        env_with_no_verify = os.environ.copy()
+        env_with_no_verify["REQUESTS_CA_BUNDLE"] = ""
+
         # CLIコマンドを実行し、標準出力をキャプチャ
-        process = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        process = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', env=env_with_no_verify)
         
         now = datetime.now()
         twenty_four_hours_ago = now - timedelta(hours=24)
