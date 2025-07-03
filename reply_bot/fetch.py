@@ -7,6 +7,21 @@ from .config import TARGET_USER
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def fetch_tweet_content(tweet_id: str) -> str | None:
+    """
+    snscrapeを使用して、指定されたツイートIDのコンテンツを取得します。
+    """
+    command = ["snscrape", "--jsonl", "twitter-tweet", tweet_id]
+    logging.info(f"snscrape コマンドを実行中 (ツイートコンテンツ取得): {' '.join(command)}")
+    try:
+        process = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
+        if process.stdout:
+            tweet = json.loads(process.stdout.splitlines()[0])
+            return tweet.get('renderedContent')
+    except (subprocess.CalledProcessError, json.JSONDecodeError, IndexError) as e:
+        logging.error(f"ツイート {tweet_id} のコンテンツ取得中にエラーが発生しました: {e}")
+    return None
+
 def fetch_replies(target_user: str) -> list[dict]:
     """
     snscrapeを使用して、指定ユーザーのツイートに対するリプライを取得します。
@@ -63,10 +78,17 @@ def fetch_replies(target_user: str) -> list[dict]:
                     'username' in tweet['inReplyToUser'] and
                     tweet['inReplyToUser']['username'].lower() == target_user.lower()):
                     
+                    original_tweet_id = str(tweet['inReplyToTweetId'])
+                    original_tweet_content = fetch_tweet_content(original_tweet_id)
+
+                    # リプライ元のツイートID、リプライ自身のID、本文、リプライしたユーザーのID、言語、元ツイートのコンテンツを取得
                     replies_data.append({
-                        "tweet_id": str(tweet['inReplyToTweetId']), # 返信元のツイートID
+                        "tweet_id": original_tweet_id, # 返信元のツイートID
                         "reply_id": str(tweet['id']),                # リプライ自身のID
-                        "content": tweet['renderedContent']          # リプライの本文
+                        "content": tweet['renderedContent'],          # リプライの本文
+                        "replier_id": tweet['user']['username'] if 'user' in tweet and 'username' in tweet['user'] else "",
+                        "lang": tweet['lang'] if 'lang' in tweet else "en", # デフォルトを英語に設定
+                        "original_tweet_content": original_tweet_content # 元ツイートのコンテンツ
                     })
             except json.JSONDecodeError as e:
                 logging.error(f"JSON解析エラー: {e} - 行: {line}")

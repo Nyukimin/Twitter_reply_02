@@ -29,7 +29,7 @@ async def main():
         if not is_replied(rid):
             logging.info(f"未返信リプライを検出しました: {rid}")
             try:
-                reply_text = generate(r["content"])
+                reply_text = generate(r["content"], r["replier_id"], r["lang"], r.get("original_tweet_content"))
                 logging.info(f"応答文を生成しました。内容: {reply_text[:50]}...")
 
                 # Playwrightでの投稿は非同期処理のためawait

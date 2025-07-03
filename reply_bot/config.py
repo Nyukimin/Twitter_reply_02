@@ -1,8 +1,8 @@
 # reply_bot/config.py の例
-TARGET_USER   = "ren_ai_coach"  # あなたのXユーザー名（@は不要）
+TARGET_USER   = "nyukimi_AI"  # あなたのXユーザー名（@は不要）
 LOGIN_URL     = "https://x.com/login"
-USERNAME      = "あなたのXユーザー名" # Xのログインに使用するユーザー名またはメールアドレス
-PASSWORD      = "あなたのXパスワード" # Xのログインに使用するパスワード
+USERNAME      = "nyukimi_AI" # Xのログインに使用するユーザー名またはメールアドレス
+PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
 OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
 DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
 # GEMINI_API_KEY= "your-gemini-api-key" # Geminiを使用する場合
@@ -32,3 +32,18 @@ MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）で�
 - 説教調・堅い言い回しは使用禁止,
 - あくまで親しみ、やさしさ、照れ、癒しが伝わることを最優先とする,
 """ 
+
+THANK_YOU_PHRASES = {
+    "ja": "ありがとう❤️",
+    "en": "thanks❤️",
+    "es": "Gracias❤️",
+    "in": "Terima kasih❤️",
+    "pt": "Obrigada❤️",
+    "qme": "❤️",
+    "tr": "Teşekkürler❤️",
+    "und": "¿Y tú?❤️"
+    "fr": "Merci!❤️",
+    "de": "Danke schön!🩷",
+    "zh": "谢谢！❤️",
+    "ko": "감사합니다!🩷"
+} 
