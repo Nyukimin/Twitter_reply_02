@@ -1,0 +1,5 @@
+snscrape
+BeautifulSoup4
+requests
+openai
+playwright 
