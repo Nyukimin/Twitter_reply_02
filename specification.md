@@ -19,6 +19,10 @@
     - リプライ元ツイートのURL、ツイートID
     - **そのリプライ元がさらにリプライである場合、順にたどる**
     - **スレッドの最初のツイート（起点）が自分の投稿かどうかを判定**
+  - **各スクロール後のHTMLソースを `/source/debug_page_source_NNN.html` (3桁の連番) の形式で保存する**
+  - **重複するリプライIDをスキップし、既に処理済みのリプライは再度追加しない**
+  - **抽出結果は `/output/extracted_tweets_YYYYMMDD_HHMMSS.csv` ファイルに、実行開始時に一度だけ作成され、追記モードで保存される**
+  - **スクロール量は、ウィンドウの高さの80%をスクロールすることで20%の重複を目指す（適応的調整は今後の検討課題）**
 
 ### 2. 起点ツイート判定ロジック
 - 対象リプライが「リプライ to リプライ」であれば、`in_reply_to_status_id` をたどる
@@ -66,7 +70,7 @@
 
 ## スケジュール実行
 - 毎日1回またはN分ごとの実行を想定（`main.py`からバッチ起動可能）
-- 実行後にログファイル（CSVまたはJSON）に処理履歴を保存
+- 実行後にログファイル（`/log/replies_log_YYYYMMDD_HHMMSS.csv`）に処理履歴を保存
 
 ---
 
@@ -85,8 +89,12 @@ Twitter_reply/
 │   ├── ...
 ├── cookie/
 │   └── twitter_cookies_01.pkl
-├── logs/
-│   └── 返信ログや失敗記録など
+├── log/
+│   └── replies_log_YYYYMMDD_HHMMSS.csv （ログファイル、Git追跡対象外）
+├── source/
+│   └── debug_page_source_NNN.html （HTMLソースファイル、Git追跡対象外）
+├── output/
+│   └── extracted_tweets_YYYYMMDD_HHMMSS.csv （抽出されたツイートデータ、Git追跡対象外）
 └── requirements.txt
 ```
 

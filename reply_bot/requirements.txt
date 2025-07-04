@@ -2,4 +2,6 @@ snscrape
 BeautifulSoup4
 requests
 openai
-playwright 
+playwright
+selenium
+pytz 

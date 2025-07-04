@@ -1,0 +1,101 @@
+UserID = K2eWez2dZM2Ltsu
+
+            <div class="css-175oi2r r-1wbh5a2 r-dnmrzs">
+             <a class="css-175oi2r r-1wbh5a2 r-dnmrzs r-1ny4l3l r-1loqt21" href="/K2eWez2dZM2Ltsu" role="link" tabindex="-1">
+              <div class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-bcqeeo r-1ttztb7 r-qvutc0 r-37j5jr r-a023e6 r-rjixqe r-16dba41 r-18u37iz r-1wvb978" dir="ltr" style="color: rgb(83, 100, 113);">
+               <span class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+                @K2eWez2dZM2Ltsu
+               </span>
+              </div>
+             </a>
+            </div>
+
+---
+
+Name = まさちゃま🧒
+
+              <div class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc r-a023e6 r-rjixqe r-b88u0q r-1awozwy r-6koalj r-1udh08x r-3s2u2q" dir="ltr" style="color: rgb(15, 20, 25);">
+               <span class="css-1jxf684 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+                <span class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+                 まさちゃま
+                </span>
+                <img alt="🧒" class="r-4qtqp9 r-dflpy8 r-k4bwe5 r-1kpi4qh r-pp5qcn r-h9hxbl" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/1f9d2.svg"/>
+               </span>
+              </div>
+
+---
+
+date_time = 2025-07-04 14:37:31
+datetime="2025-07-04T05:37:31.000Z" をJSTに変換
+
+reply_id = 1941008450131316825
+"/K2eWez2dZM2Ltsu/status/1941008450131316825"
+
+            <div class="css-175oi2r r-18u37iz r-1q142lx">
+             <a aria-label="1 時間前" class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc r-a023e6 r-rjixqe r-16dba41 r-xoduu5 r-1q142lx r-1w6e6rj r-9aw3ui r-3s2u2q r-1loqt21" dir="ltr" href="/K2eWez2dZM2Ltsu/status/1941008450131316825" role="link" style="color: rgb(83, 100, 113);">
+              <time datetime="2025-07-04T05:37:31.000Z">
+               1時間
+              </time>
+             </a>
+            </div>
+
+---
+
+reply_to = Maya19960330
+
+     <div class="css-175oi2r r-4qtqp9 r-zl2h9q">
+      <div class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc r-a023e6 r-rjixqe r-16dba41" dir="ltr" id="id__fr3dp5utxla" style="color: rgb(83, 100, 113);">
+       返信先:
+       <div class="css-175oi2r r-xoduu5">
+        <a class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-poiln3 r-1loqt21" dir="ltr" href="/Maya19960330" role="link" style="color: rgb(29, 155, 240);">
+         <span class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+          @Maya19960330
+         </span>
+        </a>
+       </div>
+       さん
+      </div>
+     </div>
+
+---
+
+contents = まやぽん…こんにちは…🧒🐷ｶﾜｲｲね…ﾁｭｯ(´ε｀ )
+
+     <div class="css-175oi2r">
+      <div class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-37j5jr r-a023e6 r-rjixqe r-16dba41 r-bnwqim" data-testid="tweetText" dir="auto" id="id__xh9tq1dtk6" lang="ja" style="color: rgb(15, 20, 25);">
+       <span class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+        まやぽん…こんにちは…
+       </span>
+       <img alt="🧒" class="r-4qtqp9 r-dflpy8 r-k4bwe5 r-1kpi4qh r-pp5qcn r-h9hxbl" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/1f9d2.svg"/>
+       <img alt="🐷" class="r-4qtqp9 r-dflpy8 r-k4bwe5 r-1kpi4qh r-pp5qcn r-h9hxbl" draggable="false" src="https://abs-0.twimg.com/emoji/v2/svg/1f437.svg"/>
+       <span class="css-1jxf684 r-bcqeeo r-1ttztb7 r-qvutc0 r-1tl8opc">
+        ｶﾜｲｲね…ﾁｭｯ(´ε｀ )
+       </span>
+      </div>
+     </div>
+
+---
+
+reply_num = 0
+"0 件の返信。返信する"
+
+     <div class="css-175oi2r">
+      <div class="css-175oi2r">
+       <div aria-label="5 件の表示" class="css-175oi2r r-1kbdv8c r-18u37iz r-1wtj0ep r-1ye8kvj r-1s2bzr4" id="id__bi90r5l27p6" role="group">
+        <div class="css-175oi2r r-18u37iz r-1h0z5md r-13awgt0">
+         <button aria-label="0 件の返信。返信する" class="css-175oi2r r-1777fci r-bt1l66 r-bztko3 r-lrvibr r-1loqt21 r-1ny4l3l" data-testid="reply" role="button" type="button">
+          <div class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-37j5jr r-a023e6 r-rjixqe r-16dba41 r-1awozwy r-6koalj r-1h0z5md r-o7ynqc r-clp7b1 r-3s2u2q" dir="ltr" style="color: rgb(83, 100, 113);">
+           <div class="css-175oi2r r-xoduu5">
+            <div class="css-175oi2r r-xoduu5 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af r-1niwhzg r-sdzlij r-xf4iuw r-o7ynqc r-6416eg r-1ny4l3l">
+
+---
+
+like_num = 0
+"0 件のいいね。いいねする"
+
+        <div class="css-175oi2r r-18u37iz r-1h0z5md r-13awgt0">
+         <button aria-label="0 件のいいね。いいねする" class="css-175oi2r r-1777fci r-bt1l66 r-bztko3 r-lrvibr r-1loqt21 r-1ny4l3l" data-testid="like" role="button" type="button">
+          <div class="css-146c3p1 r-bcqeeo r-1ttztb7 r-qvutc0 r-37j5jr r-a023e6 r-rjixqe r-16dba41 r-1awozwy r-6koalj r-1h0z5md r-o7ynqc r-clp7b1 r-3s2u2q" dir="ltr" style="color: rgb(83, 100, 113);">
+           <div class="css-175oi2r r-xoduu5">
+            <div class="css-175oi2r r-xoduu5 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af r-1niwhzg r-sdzlij r-xf4iuw r-o7ynqc r-6416eg r-1ny4l3l">
+

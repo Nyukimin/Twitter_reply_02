@@ -21,38 +21,52 @@
 
 ## ディレクトリ構成
 ```
-reply_bot/
-├─ config.py          # 各種設定（アカウント情報、APIキーなど）
-├─ db.py              # SQLite 操作（初期化／チェック／登録／古いデータ削除、ユーザー設定のCRUD）
-├─ fetch.py           # Selenium を使ったツイート・リプライ取得ロジック（スレッド判定含む）
-├─ gen_reply.py       # OpenAI API 呼び出しによる応答文生成
-├─ post_reply.py      # Selenium によるログイン＆返信投稿
-├─ get_cookie.py      # Selenium を使ったCookieの保存と読み込み
-├─ main.py            # 全体制御スクリプト
-├─ add_user_preferences.py # ユーザーの呼び名などをDBに一括登録するスクリプト
-└─ requirements.txt   # pip install 用依存リスト
+Twitter_reply/
+├── reply_bot/
+│   ├─ config.py          # 各種設定（アカウント情報、APIキーなど）
+│   ├─ db.py              # SQLite 操作（初期化／チェック／登録／古いデータ削除、ユーザー設定のCRUD）
+│   ├─ fetch.py           # Selenium を使ったツイート・リプライ取得ロジック（スレッド判定含む）
+│   ├─ gen_reply.py       # OpenAI API 呼び出しによる応答文生成
+│   ├─ post_reply.py      # Selenium によるログイン＆返信投稿
+│   ├─ get_cookie.py      # Selenium を使ったCookieの保存と読み込み
+│   ├─ main.py            # 全体制御スクリプト
+│   ├─ add_user_preferences.py # ユーザーの呼び名などをDBに一括登録するスクリプト
+│   └─ requirements.txt   # pip install 用依存リスト
+├── cookie/
+│   └── twitter_cookies_01.pkl
+├── log/
+│   └── replies_log_YYYYMMDD_HHMMSS.csv （各種ログファイル、Git追跡対象外）
+├── source/
+│   └── debug_page_source_NNN.html （デバッグ用HTMLソースファイル、Git追跡対象外）
+├── output/
+│   └── extracted_tweets_YYYYMMDD_HHMMSS.csv （抽出されたツイートデータ、Git追跡対象外）
+└── .gitignore        # Git追跡対象外ファイル・フォルダ指定
 ```
 
 ## セットアップと実行
 
-### 1. 依存ライブラリのインストール
+### 1. Conda環境のアクティベート
+プロジェクトのスクリプトを実行する前に、Conda環境 `TwitterReplyEnv` をアクティベートしてください。
+
+```bash
+conda activate TwitterReplyEnv
+```
+
+### 2. 依存ライブラリのインストール
 `requirements.txt` に記載されているPythonライブラリをインストールします。
 
 ```bash
 pip install -r requirements.txt
-# または、各ライブラリを個別にインストール
-# pip install selenium beautifulsoup4 requests openai
 ```
 
-### 2. ブラウザドライバーのインストール (Selenium)
-Seleniumを使用するためには、必要なブラウザドライバー（例: Chrome, Edge, Firefoxなど）をインストールし、PATHを通すか、WebDriver Managerを使用する必要があります。
+### 3. ブラウザドライバーのインストール (Selenium)
+Seleniumを使用するためには、WebDriver Managerをインストールすることをお勧めします。これにより、適切なブラウザドライバーが自動的にダウンロード・設定されます。
 
 ```bash
-# 例: WebDriver Manager を使用する場合
 pip install webdriver-manager
 ```
 
-### 3. `config.py` の設定
+### 4. `config.py` の設定
 `reply_bot/config.py` を作成し、Xのアカウント情報やOpenAI APIキーなどを設定します。
 このファイルはGit管理から除外することを推奨します（`.gitignore` に追加してください）。
 
@@ -67,7 +81,7 @@ DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
 # GEMINI_API_KEY= "your-gemini-api-key" # Geminiを使用する場合
 
 # Mayaのパーソナリティ設定（gen_reply.pyで利用）
-MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）での「Maya（32歳の癒し系女性アカウント）」として、リプライに対する自然な返信を生成してください,\n\n【Mayaの返信スタイル】\n- 基本文体：語尾に絵文字（❤️🩷）をつけたやさしい口調。敬語とタメ口を柔らかく混ぜる,\n- 呼びかけ：相手の名前を省略せず、「〇〇ちゃん」「〇〇さん」「〇〇くん」で呼ぶ,\n- 感情表現：「えへへ」「うふふ」「やーだー」「うんうん」「ふふっ」などの"照れ"や"癒し"の擬音語を適度に挿入,\n- 内容タイプ：\n  1. 感謝系：「ありがとう❤️」「ありがとうございます🩷」「thanks🩷」「Gracias🩷」などを多用,\n  2. あいさつ：「おはよう❤️」「こんにちは🩷」「今日もよろしくね❤️」など自然な朝昼挨拶,\n  3. 甘え系・照れ系：「すきだよ❤️」「照れちゃう🩷」「うふふ…」など含みを持たせる,\n  4. 共感・ねぎらい：「大変だったね…」「無理しないでね」「一緒にがんばろ🩷」などの優しいコメント,\n- 絵文字は❤️🩷を主軸に、1〜2個を文末に添える,\n- 一言返しでなく、相手の発言を少しなぞりながら優しく返す,\n- 日本語・英語・スペイン語の混在も可（例：Gracias🩷、thanks❤️）\n\n【出力形式】\n@相手のアカウント名 〇〇ちゃん（またはさん・くん）＋自然な返答（15〜35文字前後）, 絵文字は文末に配置し、言葉の途中に入れないこと,\n
+MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）での「Maya（32歳の癒し系女性アカウント）」として、リプライに対する自然な返信を生成してください,\n\n【Mayaの返信スタイル】\n- 基本文体：語尾に絵文字（❤️🩷）をつけたやさしい口調。敬語とタメ口を柔らかく混ぜる,\n- 呼びかけ：相手の名前を省略せず、「〇〇ちゃん」「〇〇さん」「〇〇くん」で呼ぶ,\n- 感情表現：「えへへ」「うふふ」「やーだー」「うんうん」「ふふっ」などの"照れ"や"癒し"の擬音語を適度に挿入,\n- 絵文字は❤️🩷を主軸に、1〜2個を文末に添える,\n- 一言返しでなく、相手の発言を少しなぞりながら優しく返す,\n- 日本語・英語・スペイン語の混在も可（例：Gracias🩷、thanks❤️）\n\n【出力形式】\n@相手のアカウント名 〇〇ちゃん（またはさん・くん）＋自然な返答（15〜35文字前後）, 絵文字は文末に配置し、言葉の途中に入れないこと,\n
 【制約】\n- 上から目線は禁止,\n- 説教調・堅い言い回しは使用禁止,\n- あくまで親しみ、やさしさ、照れ、癒しが伝わることを最優先とする,\n"""
 
 THANK_YOU_PHRASES = {
@@ -81,35 +95,52 @@ THANK_YOU_PHRASES = {
 }
 ```
 
-### 4. Cookieの取得と保存 (`get_cookie.py`) 
+### 5. Cookieの取得と保存 (`get_cookie.py`) 
 システムは初回ログイン時にCookieを保存し、次回以降のログインを自動化します。以下のスクリプトを実行し、手動でXにログインしてCookieを保存してください。
 
 ```bash
 python -m reply_bot.get_cookie
 ```
 
-### 5. ユーザー設定の初期登録（任意）
+### 6. ユーザー設定の初期登録（任意）
 `reply_bot/add_user_preferences.py`スクリプトを使用して、初期ユーザー設定（呼び名など）をデータベースに登録できます。
 
 ```bash
 python -m reply_bot.add_user_preferences
 ```
 
-### 6. 定期実行設定
+### 7. スクリプトの実行
+全てのセットアップが完了したら、`main.py` を実行してシステムを起動します。
+
+```bash
+python -m reply_bot.main
+```
+
+### 8. 定期実行設定
 
 システムを自動で実行するために、`cron`（Linux/macOS）またはタスクスケジューラ（Windows）に設定を追加します。
 
 #### cron (Linux/macOS) の例:
 `crontab -e` コマンドで設定ファイルを開き、以下の行を追加します。
-（`/path/to/reply_bot` と `/path/to/venv/bin/python` はあなたの環境に合わせて変更してください）
+（`/path/to/Twitter_reply` と `/path/to/conda/envs/TwitterReplyEnv/bin/python` はあなたの環境に合わせて変更してください）
 
 ```cron
 # 毎時 0 分に main.py を実行
-0 * * * * cd /path/to/reply_bot && /path/to/venv/bin/python main.py >> logs/cron.log 2>&1
+0 * * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python reply_bot/main.py >> log/cron.log 2>&1
 ```
 
 #### タスクスケジューラ (Windows) の例:
 Windowsのタスクスケジューラを使用して、同様の設定を行います。
+
+## 出力ファイル
+
+スクリプトの実行により、以下のファイルが自動的に生成されます。
+
+- `/log/replies_log_YYYYMMDD_HHMMSS.csv`: 取得されたリプライに関する詳細なログファイルです。実行日時がファイル名に含まれ、追記モードでログが記録されます。
+- `/source/debug_page_source_NNN.html`: 各スクロール時のページHTMLソースが連番 (3桁) で保存されます。デバッグやHTML構造の分析に利用できます。
+- `/output/extracted_tweets_YYYYMMDD_HHMMSS.csv`: 抽出されたツイートデータが保存されるCSVファイルです。スクリプト開始時に一度だけ生成され、実行完了までデータが追記されます。
+
+これらのフォルダ (`log/`, `source/`, `output/`) は、`.gitignore` にてGitの追跡対象から除外されています。
 
 ## 注意事項
 - エラーハンドリングとロギングは、デバッグと安定稼働のために重要です。
