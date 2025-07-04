@@ -1,137 +1,197 @@
-import subprocess
 import json
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import time
+import re
+
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+
 from .config import TARGET_USER
-import ssl
+from .get_cookie import load_cookies_and_navigate # load_cookies_and_navigate をインポート
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def fetch_tweet_content(tweet_id: str) -> str | None:
     """
-    snscrapeを使用して、指定されたツイートIDのコンテンツを取得します。
+    今回はSeleniumベースで実装するため、この関数は直接使用されませんが、
+    将来的にはツイート詳細ページからコンテンツを取得するロジックをここに追加可能です。
+    現時点では None を返します。
     """
-    command = ["snscrape", "--jsonl", "twitter-tweet", tweet_id]
-    logging.info(f"snscrape コマンドを実行中 (ツイートコンテンツ取得): {' '.join(command)}")
-    try:
-        process = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        if process.stdout:
-            tweet = json.loads(process.stdout.splitlines()[0])
-            return tweet.get('renderedContent')
-    except (subprocess.CalledProcessError, json.JSONDecodeError, IndexError) as e:
-        logging.error(f"ツイート {tweet_id} のコンテンツ取得中にエラーが発生しました: {e}")
     return None
 
 def fetch_replies(target_user: str) -> list[dict]:
     """
-    snscrapeを使用して、指定ユーザーのツイートに対するリプライを取得します。
-    直近24時間のリプライのみを対象とします。
-    
-    Args:
-        target_user (str): リプライを取得したいユーザーのX（旧Twitter）ID（@なし）。
-
-    Returns:
-        list[dict]: 以下の形式のリプライデータのリスト。
-                    [
-                      {"tweet_id": "返信元のツイートID", "reply_id": "リプライ自身のID", "content": "リプライの本文"},
-                      ...
-                    ]
+    Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得します。
+    Twitterの通知ページからリプライ一覧を抽出し、スレッドの起点判定も行います。
     """
     replies_data = []
-    
-    # snscrape コマンドの構築
-    # 'to:target_user' で target_user へのメンションやリプライを含むツイートを検索
-    # `--jsonl` でJSON Lines形式の出力を得る
-    query = f"to:{target_user}"
-    command = ["snscrape", "--jsonl", "twitter-search", query]
-
-    logging.info(f"snscrape コマンドを実行中: {' '.join(command)}")
-
-    # 一時的にSSL検証を無効化 (セキュリティリスクを伴うため、デバッグ目的でのみ使用)
-    original_https_context = None
-    if hasattr(ssl, '_create_default_https_context'):
-        original_https_context = ssl._create_default_https_context
-        ssl._create_default_https_context = ssl._create_unverified_context
-
+    driver = None
     try:
-        # 環境変数 REQUESTS_CA_BUNDLE を一時的に空に設定してSSL検証を無効化
-        # これはセキュリティリスクを伴うため、デバッグ目的でのみ使用
-        env_with_no_verify = os.environ.copy()
-        env_with_no_verify["REQUESTS_CA_BUNDLE"] = ""
+        options = Options()
+        options.add_argument('--headless') # ヘッドレスモードで実行
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        logging.info("Selenium WebDriverを起動しました。")
 
-        # CLIコマンドを実行し、標準出力をキャプチャ
-        process = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8', env=env_with_no_verify)
+        # Cookieを読み込んでログイン状態を復元
+        if not load_cookies_and_navigate(driver):
+            logging.error("Cookieの読み込みに失敗しました。手動ログインが必要です。")
+            return []
         
-        now = datetime.now()
+        logging.info("Cookieを使ってXにログインしました。")
+
+        # 通知ページへ移動
+        notification_url = f"https://x.com/notifications/mentions"
+        driver.get(notification_url)
+        logging.info(f"通知ページ ({notification_url}) にアクセスしました。")
+        logging.info(f"現在のURL: {driver.current_url}")
+        logging.info(f"ページタイトル: {driver.title}")
+
+        # ページが完全にロードされるのを待機 (例: タイムラインのツイートが表示されるまで)
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+        )
+        logging.info("通知ページのコンテンツがロードされました。")
+
+        # デバッグ用にページソースをファイルに保存
+        with open("debug_page_source.html", "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        logging.info("現在のページソースを debug_page_source.html に保存しました。")
+
+        # ページソースを取得してBeautifulSoupで解析
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+
+        # リプライ要素の抽出 (XのHTML構造は頻繁に変わるため、要調整)
+        # 仮のセレクタ。実際には開発者ツールで正確なセレクタを特定する必要がある
+        # 例えば、特定の属性やクラスを持つarticleタグを探す
+        tweets = soup.find_all('article', {'data-testid': 'tweet'})
+
+        if not tweets:
+            logging.warning("data-testid=\"tweet\"を持つarticleタグが見つかりませんでした。ページソースを確認してください。")
+            logging.info(f"取得したページソースの一部: {driver.page_source[:1000]}...") # ページソースの先頭1000文字を出力
+
+        now = datetime.now(timezone.utc)
         twenty_four_hours_ago = now - timedelta(hours=24)
 
-        for line in process.stdout.splitlines():
+        for tweet_article in tweets:
             try:
-                tweet = json.loads(line)
+                # ツイートID（リプライ自身のID）の抽出
+                # 各ツイートの permalink を含む a タグを探す
+                # data-testid="tweet" の中にあり、href属性が /<user>/status/<id> の形式
+                tweet_link = tweet_article.find('a', {'href': lambda href: href and '/status/' in href and '/photo/' not in href and '/video/' not in href})
                 
-                # リプライが24時間以内であるかチェック
-                tweet_datetime_str = tweet.get('date')
-                if not tweet_datetime_str:
-                    logging.warning(f"ツイートに日付フィールドがありません: {tweet.get('id')}")
+                reply_id = None
+                if tweet_link and 'href' in tweet_link.attrs:
+                    reply_id = tweet_link['href'].split('/')[-1]
+
+                if not reply_id or not reply_id.isdigit():
+                    logging.warning("有効なリプライIDが見つかりませんでした。スキップします。")
                     continue
 
-                # ISOフォーマットの日付文字列をdatetimeオブジェクトに変換
-                # snscrapeのdateはUTCであることが多いため、タイムゾーン情報が正確であることを確認
-                tweet_datetime = datetime.fromisoformat(tweet_datetime_str)
+                # リプライ本文の抽出
+                content_element = tweet_article.find('div', {'data-testid': 'tweetText'})
+                content = content_element.get_text(separator='\n') if content_element else ""
+
+                # リプライしたユーザーIDの抽出を強化
+                replier_id = ""
+                # まずは data-testid="User-Names" からの抽出を試みる (現在の実装)
+                user_names_div = tweet_article.find('div', {'data-testid': 'User-Names'})
+                if user_names_div:
+                    user_link = user_names_div.find('a', {'href': lambda href: href and href.startswith('/') and '/status/' not in href})
+                    if user_link and 'href' in user_link.attrs:
+                        replier_id = user_link['href'].lstrip('/')
                 
+                # 見つからない場合は、より一般的なユーザープロフィールリンクを探す
+                if not replier_id:
+                    # ツイート記事内で直接ユーザーのプロフィールリンクを探す
+                    # 例: <a role="link" href="/username" ...>
+                    user_profile_link = tweet_article.find('a', {'role': 'link', 'href': lambda href: href and href.startswith('/') and '/status/' not in href})
+                    if user_profile_link and 'href' in user_profile_link.attrs:
+                        replier_id = user_profile_link['href'].lstrip('/')
+
+                if not replier_id:
+                    logging.warning(f"リプライしたユーザーIDが見つかりませんでした。スキップします。リプライID: {reply_id}")
+                    continue
+
+                # リプライの言語はBeautifulSoupでは直接取得が難しい場合が多いので、仮で日本語と設定
+                lang = "ja"
+
+                # 元ツイートのコンテンツ (ここではまだ取得しないが、Placeholderとして追加)
+                original_tweet_content = None
+
+                # ツイート投稿日時の抽出 (timeタグのdatetime属性)
+                time_element = tweet_article.find('time')
+                tweet_datetime = None
+                if time_element and 'datetime' in time_element.attrs:
+                    try:
+                        # %Y-%m-%dT%H:%M:%S.%fZ はISO 8601形式で、ZはUTCを意味する
+                        # timezone.utc を明示的に設定してawareなdatetimeオブジェクトにする
+                        tweet_datetime = datetime.strptime(time_element['datetime'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+                    except ValueError as e:
+                        logging.warning(f"日時解析エラー: {e} - datetime属性: {time_element['datetime']}")
+                        continue
+
+                if not tweet_datetime:
+                    logging.warning("ツイート投稿日時が見つかりませんでした。スキップします。")
+                    continue
+                
+                # 24時間以上前のリプライはスキップ
                 if tweet_datetime < twenty_four_hours_ago:
-                    continue # 24時間以上前のリプライはスキップ
+                    logging.info(f"24時間以上前のリプライです。スキップします。リプライID: {reply_id}")
+                    continue
 
-                # target_userのツイートに対する直接のリプライであるかを判断
-                # inReplyToTweetId が存在し、かつ inReplyToUser の username が target_user と一致する場合
-                if ('inReplyToTweetId' in tweet and tweet['inReplyToTweetId'] is not None and
-                    'inReplyToUser' in tweet and tweet['inReplyToUser'] is not None and
-                    'username' in tweet['inReplyToUser'] and
-                    tweet['inReplyToUser']['username'].lower() == target_user.lower()):
-                    
-                    original_tweet_id = str(tweet['inReplyToTweetId'])
-                    original_tweet_content = fetch_tweet_content(original_tweet_id)
+                # スレッド起点判定ロジックを強化
+                is_my_thread = False
+                reply_context_element = tweet_article.find('div', {'data-testid': 'replyContext'})
+                if reply_context_element:
+                    # replyContext 内のユーザーリンクを探す
+                    target_user_link_in_context = reply_context_element.find('a', {'href': f'/{target_user}'})
+                    if target_user_link_in_context:
+                        is_my_thread = True
+                
+                # もし replyContext で見つからない場合、リプライ本文に自分のユーザー名が含まれているかチェック
+                if not is_my_thread and target_user.lower() in content.lower():
+                    is_my_thread = True
 
-                    # リプライ元のツイートID、リプライ自身のID、本文、リプライしたユーザーのID、言語、元ツイートのコンテンツを取得
-                    replies_data.append({
-                        "tweet_id": original_tweet_id, # 返信元のツイートID
-                        "reply_id": str(tweet['id']),                # リプライ自身のID
-                        "content": tweet['renderedContent'],          # リプライの本文
-                        "replier_id": tweet['user']['username'] if 'user' in tweet and 'username' in tweet['user'] else "",
-                        "lang": tweet['lang'] if 'lang' in tweet else "en", # デフォルトを英語に設定
-                        "original_tweet_content": original_tweet_content # 元ツイートのコンテンツ
-                    })
-            except json.JSONDecodeError as e:
-                logging.error(f"JSON解析エラー: {e} - 行: {line}")
-            except KeyError as e:
-                logging.warning(f"snscrape出力に予期せぬキーが見つかりません: {e} - ツイートデータの一部: {line[:100]}...")
-            except ValueError as e: # datetime.fromisoformatのエラーハンドリング
-                logging.error(f"日付解析エラー: {e} - 日付文字列: {tweet_datetime_str} - 行: {line}")
+                # リプライの言語 (BeautifulSoupでは直接取得が難しい場合が多い。後で推定するか、PlaywrightのJS実行で取得)
+                lang = "ja" # 仮で日本語と設定
 
-    except subprocess.CalledProcessError as e:
-        logging.error(f"snscrape コマンドがエラーコード {e.returncode} で失敗しました: {e.stderr}")
-        logging.error(f"標準エラー出力: {e.stderr}")
-    except FileNotFoundError:
-        logging.error("snscrape コマンドが見つかりません。インストールされているか、PATHが通っているか確認してください。")
+                replies_data.append({
+                    "tweet_id": reply_id,
+                    "reply_id": reply_id, # リプライ自身のID
+                    "content": content,
+                    "replier_id": replier_id,
+                    "lang": lang,
+                    "original_tweet_content": original_tweet_content, # 現時点では None
+                    "is_my_thread": is_my_thread
+                })
+            except Exception as e:
+                logging.error(f"ツイートの解析中にエラーが発生しました: {e}")
+                if tweet_article:
+                    logging.error(f"解析失敗したツイートのHTMLスニペット: {tweet_article.prettify()[:500]}...") # 失敗したツイートのHTMLスニペットを出力
+
+    except Exception as e:
+        logging.error(f"リプライ収集中にエラーが発生しました: {e}")
     finally:
-        # 元のHTTPSコンテキストに戻す
-        if original_https_context:
-            ssl._create_default_https_context = original_https_context
+        if driver:
+            driver.quit()
 
     return replies_data
 
 if __name__ == "__main__":
     # テスト実行用のダミーユーザー名
-    # 実際の運用ではconfig.pyからTARGET_USERをインポートして使用
-    # from config import TARGET_USER
-    
-    # 開発環境でテストする際は、一時的に有効なユーザー名に置き換えてください。
-    # 例: test_user = "ren_ai_coach"
-    test_user = "test_user_for_snscrape"
+    test_user = "nyukimi_AI" # config.py からインポートするTARGET_USERを使用
 
-    logging.info(f"ユーザー {test_user} のリプライを取得中...")
+    logging.info(f"ユーザー {test_user} のリプライを取得中... (Selenium)")
     sample_replies = fetch_replies(test_user)
     
     if sample_replies:
