@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime, timedelta
 from .config import TARGET_USER
+import ssl
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -47,6 +48,12 @@ def fetch_replies(target_user: str) -> list[dict]:
     command = ["snscrape", "--jsonl", "twitter-search", query]
 
     logging.info(f"snscrape コマンドを実行中: {' '.join(command)}")
+
+    # 一時的にSSL検証を無効化 (セキュリティリスクを伴うため、デバッグ目的でのみ使用)
+    original_https_context = None
+    if hasattr(ssl, '_create_default_https_context'):
+        original_https_context = ssl._create_default_https_context
+        ssl._create_default_https_context = ssl._create_unverified_context
 
     try:
         # 環境変数 REQUESTS_CA_BUNDLE を一時的に空に設定してSSL検証を無効化
@@ -108,6 +115,10 @@ def fetch_replies(target_user: str) -> list[dict]:
         logging.error(f"標準エラー出力: {e.stderr}")
     except FileNotFoundError:
         logging.error("snscrape コマンドが見つかりません。インストールされているか、PATHが通っているか確認してください。")
+    finally:
+        # 元のHTTPSコンテキストに戻す
+        if original_https_context:
+            ssl._create_default_https_context = original_https_context
 
     return replies_data
 
