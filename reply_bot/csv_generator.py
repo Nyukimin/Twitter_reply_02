@@ -126,6 +126,11 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             if match:
                 like_num = int(match.group(1))
 
+        # 言語コードの抽出
+        lang = 'und' # デフォルトは 'und'
+        if content_element and content_element.has_attr('lang'):
+            lang = content_element['lang']
+
         return {
             "UserID": replier_id,
             "Name": display_name,
@@ -135,7 +140,8 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             "contents": content,
             "reply_num": reply_num,
             "like_num": like_num,
-            "is_my_thread": is_my_thread  # スレッド起点判定フラグを追加
+            "is_my_thread": is_my_thread,  # スレッド起点判定フラグを追加
+            "lang": lang
         }
     except Exception as e:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
@@ -224,7 +230,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
                     processed_reply_ids.add(reply_id)
 
                     # CSVに書き込む (追記モード)
-                    fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
+                    fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread", "lang"]
                     with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                         if not csv_header_written:
@@ -263,7 +269,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
                         processed_reply_ids.add(reply_id)
 
                         # CSVに書き込む (追記モード)
-                        fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
+                        fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread", "lang"]
                         with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                             if not csv_header_written:
@@ -310,6 +316,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
                     writer.writeheader()
                 writer.writerows(replies_data)
             logging.info(f"合計 {len(replies_data)} 件のリプライを {output_csv_path} に保存しました。")
+            logging.info(f"最終的に {len(processed_reply_ids)} 件のユニークなリプライが処理されました。")
             return output_csv_path
         except Exception as e:
             logging.error(f"CSVファイルへの書き込み中にエラーが発生しました: {e}")
@@ -319,16 +326,34 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
         # 新しいリプライがなくても、ファイル自体は存在している可能性があるのでパスを返す
         return output_csv_path
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Xの通知ページからリプライを取得し、CSVファイルに出力します。')
-    parser.add_argument('output_csv', type=str, help='出力するCSVファイルのパス (例: output/extracted_tweets.csv)')
-    parser.add_argument('--max_scrolls', type=int, default=MAX_SCROLLS, help=f'最大スクロール回数 (デフォルト: {MAX_SCROLLS})')
-    parser.add_argument('--scroll_pixels', type=int, default=SCROLL_PIXELS, help=f'1回のスクロール量をピクセル数で指定します (デフォルト: {SCROLL_PIXELS}px)')
-    
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="指定ユーザーのツイートに対するリプライを取得し、CSVリストを生成します。")
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="出力CSVファイルのパス。指定しない場合はタイムスタンプ付きのファイル名が自動生成されます。"
+    )
+    parser.add_argument(
+        "--scrolls",
+        type=int,
+        default=MAX_SCROLLS,
+        help=f"最大スクロール回数 (デフォルト: {MAX_SCROLLS})"
+    )
+    parser.add_argument(
+        "--pixels",
+        type=int,
+        default=SCROLL_PIXELS,
+        help=f"1回のスクロール量（ピクセル数）(デフォルト: {SCROLL_PIXELS})"
+    )
     args = parser.parse_args()
-    
-    main_process(
-        args.output_csv, 
-        max_scrolls=args.max_scrolls, 
-        scroll_pixels=args.scroll_pixels
-    ) 
+
+    # 出力パスが指定されていない場合、タイムスタンプ付きのパスを生成
+    if not args.output:
+        output_dir = "output"
+        now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_file = f"extracted_tweets_{now_str}.csv"
+        output_path = os.path.join(output_dir, output_file)
+    else:
+        output_path = args.output
+
+    main_process(output_csv_path=output_path, max_scrolls=args.scrolls, scroll_pixels=args.pixels) 

@@ -3,13 +3,13 @@ TARGET_USER   = "Maya19960330"  # あなたのXユーザー名（@は不要）
 LOGIN_URL     = "https://x.com/login"
 USERNAME      = "Maya19960330" # Xのログインに使用するユーザー名またはメールアドレス
 PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
-OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
+# OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
 DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
-# GEMINI_API_KEY= "your-gemini-api-key" # Geminiを使用する場合
+GEMINI_API_KEY= "AIzaSyA7aSuSGwd2weVFYXbnbA1fIznLdbHqlbE" # Geminiを使用する場合
 
 # スクロール設定
 MAX_SCROLLS   = 500  # 最大スクロール回数（デフォルト: 100）
-SCROLL_PIXELS = 4000  # 1回のスクロール量（ピクセル数）
+SCROLL_PIXELS = 3000  # 1回のスクロール量（ピクセル数）
 
 # タイムアウト設定
 LOGIN_TIMEOUT_ENABLED = False   # ログインタイムアウトを有効にするかどうか（True/False）
@@ -36,7 +36,7 @@ MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）で�
 - 感情表現：「えへへ」「うふふ」「やーだー」「うんうん」「ふふっ」などの"照れ"や"癒し"の擬音語を適度に挿入,
 - 内容タイプ：
   1. 感謝系：「ありがとう❤️」「ありがとうございます🩷」「thanks🩷」「Gracias🩷」などを多用,
-  2. あいさつ：「おはよう❤️」「こんにちは🩷」「今日もよろしくね❤️」など自然な朝昼挨拶,
+  2. あいさつ：「おはよう❤️」「こんにちは��」「今日もよろしくね❤️」など自然な朝昼挨拶,
   3. 甘え系・照れ系：「すきだよ❤️」「照れちゃう🩷」「うふふ…」など含みを持たせる,
   4. 共感・ねぎらい：「大変だったね…」「無理しないでね」「一緒にがんばろ🩷」などの優しいコメント,
 - 絵文字は❤️🩷を主軸に、1〜2個を文末に添える,

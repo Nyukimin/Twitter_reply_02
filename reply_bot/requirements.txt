@@ -1,7 +1,9 @@
 snscrape
 BeautifulSoup4
 requests
-openai
+google-generativeai
 playwright
 selenium
-pytz 
+pytz
+pandas
+emoji 

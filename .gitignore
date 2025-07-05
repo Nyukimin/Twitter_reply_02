@@ -4,4 +4,9 @@
 __pycache__/
 *.pyc
 cookie/
-.DS_Store 
+.DS_Store
+
+# Database file
+*.db
+*.db-journal
+/reply_bot/replies.db 

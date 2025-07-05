@@ -7,6 +7,7 @@ import time
 import pickle
 import pandas as pd
 from datetime import datetime
+import argparse
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -144,15 +145,17 @@ def write_replies_to_csv(replies: list, output_path: str):
         writer.writerows(replies)
     logging.info(f"結果を {output_path} に保存しました。")
 
-def main_process(input_csv: str) -> str | None:
+def main_process(input_csv: str, limit: int = None) -> str | None:
     """
-    入力CSVを読み込み、スレッドの起点を確認・更新し、結果を新しいCSVに出力します。
+    入力CSVを読み込み、スレッドの起点を確認・更新し、結果を一件ずつ新しいCSVに追記します。
     """
-    logging.info(f"'{input_csv}' からデータを読み込みます...")
+    logging.info(f"'{input_csv}' からデータを読み込み、逐次処理を開始します...")
     try:
         df = pd.read_csv(input_csv)
-        replies_data = df.to_dict('records')
-        logging.info(f"CSVから {len(replies_data)} 件のリプライを読み込みました。")
+        if limit:
+            df = df.head(limit)
+            logging.info(f"処理件数を {limit} 件に制限しました。")
+        logging.info(f"CSVから {len(df)} 件のリプライを読み込みました。")
     except FileNotFoundError:
         logging.error(f"入力ファイルが見つかりません: {input_csv}")
         return None
@@ -163,27 +166,53 @@ def main_process(input_csv: str) -> str | None:
     # 出力ファイルパスの決定
     base_name = os.path.basename(input_csv)
     name_part = base_name.replace('extracted_tweets_', '')
-    output_csv = os.path.join(os.path.dirname(input_csv), f"priority_replies_rechecked_{name_part}")
+    output_csv = os.path.join("output", f"priority_replies_rechecked_{name_part}")
+
+    # 出力ファイルのヘッダーを準備
+    fieldnames = list(df.columns)
+    if 'is_my_thread' not in fieldnames:
+        fieldnames.append('is_my_thread')
 
     driver = None
     try:
         driver = setup_driver(headless=False)
         if not driver:
             return None
+
+        # 最初にヘッダーをファイルに書き込む (wモードでファイルを初期化)
+        with open(output_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+        logging.info(f"--- スレッド起点の確認とCSVへの逐次書き込みを開始します ({output_csv}) ---")
+        
+        processed_count = 0
+        # DataFrameを行ごとに処理
+        for index, row in df.iterrows():
+            reply_dict = row.to_dict()
+            tweet_url = f"https://x.com/{reply_dict['UserID']}/status/{reply_dict['reply_id']}"
             
-        logging.info("--- スレッド起点の確認と更新を行います ---")
-        checked_replies = check_and_update_thread_origin(replies_data, driver)
-    
-        # 優先度付けが有効な場合のみフィルタリング
-        if PRIORITY_REPLY_ENABLED:
-            logging.info("--- 優先度に基づいてリプライをフィルタリングします ---")
-            final_replies = get_priority_replies(checked_replies, driver)
-        else:
-            logging.info("--- 優先度フィルタリングは無効です。全ての結果を出力します ---")
-            final_replies = checked_replies
+            logging.info(f"[{index + 1}/{len(df)}] 処理中: {tweet_url}")
             
-        logging.info(f"--- 結果をCSVに出力します ({len(final_replies)} 件) ---")
-        write_replies_to_csv(final_replies, output_csv)
+            root_author = get_thread_origin_author(tweet_url, driver)
+            
+            # is_my_thread フラグを更新
+            is_my_thread = (root_author and root_author == TARGET_USER)
+            reply_dict['is_my_thread'] = is_my_thread
+            
+            if is_my_thread:
+                logging.info(f"  -> 自分のスレッドのリプライです。")
+            else:
+                logging.info(f"  -> 他人のスレッドのリプライです。(起点: {root_author})")
+
+            # 追記モードでファイルを開き、1行書き込む
+            with open(output_csv, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writerow(reply_dict)
+            
+            processed_count += 1
+
+        logging.info(f"--- 全 {processed_count} 件の処理が完了し、{output_csv} に保存されました ---")
         return output_csv
 
     except Exception as e:
@@ -236,10 +265,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='リプライのスレッド起点を確認し、CSVを更新します。')
     parser.add_argument('input_csv', type=str, help='入力CSVファイルのパス')
     parser.add_argument('--test', action='store_true', help='このフラグを立てると、先頭5件のみを処理するテストモードで実行します。')
+    parser.add_argument('--limit', type=int, help='処理するリプライの最大件数。')
 
     args = parser.parse_args()
 
     if args.test:
         main_test(args.input_csv)
     else:
-        main_process(args.input_csv) 
+        main_process(args.input_csv, limit=args.limit) 

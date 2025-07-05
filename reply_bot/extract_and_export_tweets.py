@@ -92,6 +92,11 @@ def extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             if match:
                 like_num = int(match.group(1))
 
+        # 言語コードの抽出
+        lang = 'und' # デフォルトは 'und'
+        if content_element and content_element.has_attr('lang'):
+            lang = content_element['lang']
+
         return {
             "UserID": replier_id,
             "Name": display_name,
@@ -100,7 +105,8 @@ def extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             "reply_to": reply_to_user,
             "contents": content,
             "reply_num": reply_num,
-            "like_num": like_num
+            "like_num": like_num,
+            "lang": lang
         }
     except Exception as e:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
@@ -128,7 +134,7 @@ def extract_and_export_tweets_to_csv(html_file_path: str, output_csv_path: str, 
                 all_extracted_data.append(extracted_info)
             
         if all_extracted_data:
-            fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num"]
+            fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "lang"]
             with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
