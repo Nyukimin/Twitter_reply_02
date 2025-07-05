@@ -15,7 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, NavigableString, Tag
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-from .config import TARGET_USER, MAX_SCROLLS, LOGIN_TIMEOUT_ENABLED, LOGIN_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT_SECONDS
+from .config import TARGET_USER, MAX_SCROLLS, LOGIN_TIMEOUT_ENABLED, LOGIN_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT_SECONDS, SCROLL_PIXELS
 from .utils import setup_driver # 共通のWebDriverセットアップをインポート
 
 # ロギング設定
@@ -141,7 +141,7 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
         return None
 
-def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | None:
+def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pixels: int = SCROLL_PIXELS) -> str | None:
     """
     Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得し、CSVリストを生成します。
     Twitterの通知ページからリプライ一覧を抽出し、スクロールしながらHTMLを保存し、
@@ -149,7 +149,8 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | 
     
     Args:
         output_csv_path: 出力CSVファイルパス
-        max_scrolls: 最大スクロール回数（デフォルト: 100）
+        max_scrolls: 最大スクロール回数
+        scroll_pixels: 1回のスクロール量（ピクセル数）
     
     Returns:
         str | None: 生成されたCSVファイルのパス。失敗した場合はNone。
@@ -237,7 +238,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | 
 
         # ページを下にスクロールしてすべてのツイートをロード
         scroll_count = 0
-        while True:
+        while scroll_count < max_scrolls:
             scroll_count += 1
             logging.info(f"スクロール {scroll_count}/{max_scrolls} 回目...")
             current_html_source = driver.page_source
@@ -273,8 +274,9 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | 
                         logging.info(f"重複するリプライIDをスキップしました: {reply_id}")
             
             last_height = driver.execute_script("return document.body.scrollHeight")
-            window_height = driver.execute_script("return window.innerHeight;")
-            scroll_by = window_height * 0.8 # 20%重複するように80%スクロール
+            
+            # 指定されたピクセル数でスクロール
+            scroll_by = scroll_pixels
 
             # 現在のスクロール位置から指定量スクロール
             driver.execute_script(f"window.scrollBy(0, {scroll_by});")
@@ -282,10 +284,12 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | 
             
             new_height = driver.execute_script("return document.body.scrollHeight")
             
-            # 新しいコンテンツがロードされなかった場合、または最大スクロール回数に達した場合に停止
-            if new_height == last_height or scroll_count >= max_scrolls:
-                logging.info(f"ページがこれ以上スクロールできないか、最大スクロール回数({max_scrolls}回)に達したため、スクロールを停止します。")
+            # 新しいコンテンツがロードされなかった場合に停止
+            if new_height == last_height:
+                logging.info("ページがこれ以上スクロールできないため、スクロールを停止します。")
                 break
+        else: # whileループが正常に終了した場合
+            logging.info(f"最大スクロール回数({max_scrolls}回)に達したため、スクロールを停止します。")
         
         logging.info("すべてのスクロールと抽出が完了しました。")
 
@@ -318,7 +322,13 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Xの通知ページからリプライを取得し、CSVファイルに出力します。')
     parser.add_argument('output_csv', type=str, help='出力するCSVファイルのパス (例: output/extracted_tweets.csv)')
+    parser.add_argument('--max_scrolls', type=int, default=MAX_SCROLLS, help=f'最大スクロール回数 (デフォルト: {MAX_SCROLLS})')
+    parser.add_argument('--scroll_pixels', type=int, default=SCROLL_PIXELS, help=f'1回のスクロール量をピクセル数で指定します (デフォルト: {SCROLL_PIXELS}px)')
     
     args = parser.parse_args()
     
-    main_process(args.output_csv) 
+    main_process(
+        args.output_csv, 
+        max_scrolls=args.max_scrolls, 
+        scroll_pixels=args.scroll_pixels
+    ) 
