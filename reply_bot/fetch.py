@@ -7,6 +7,7 @@ import re
 import csv
 import pytz
 import pickle
+from pathlib import Path
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -16,10 +17,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from .config import TARGET_USER
 from .get_cookie import load_cookies_and_navigate # load_cookies_and_navigate をインポート
+from . import db  # データベースモジュールをインポート
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -89,6 +91,13 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             if reply_to_link and 'href' in reply_to_link.attrs:
                 reply_to_user = reply_to_link['href'].lstrip('/')
 
+        # スレッド起点判定
+        is_my_thread = False
+        if reply_to_user:
+            # リプライ元がMaya（@Maya19960330）かどうかを判定
+            is_my_thread = (reply_to_user == "Maya19960330")
+            logging.info(f"リプライ元ユーザー: {reply_to_user}, スレッド起点判定: {is_my_thread}")
+
         # 返信数といいね数の抽出
         reply_num = 0
         like_num = 0
@@ -113,7 +122,8 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             "reply_to": reply_to_user,
             "contents": content,
             "reply_num": reply_num,
-            "like_num": like_num
+            "like_num": like_num,
+            "is_my_thread": is_my_thread  # スレッド起点判定フラグを追加
         }
     except Exception as e:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
@@ -215,7 +225,7 @@ def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
                         processed_reply_ids.add(reply_id)
 
                         # CSVに書き込む (追記モード)
-                        fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num"]
+                        fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
                         with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                             if not csv_header_written:
@@ -250,36 +260,46 @@ def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
         logging.info("Selenium WebDriverを終了しました。")
     return replies_data
 
-if __name__ == "__main__":
-    # テスト実行用のダミーユーザー名
-    test_user = "nyukimi_AI" # config.py からインポートするTARGET_USERを使用
-
-    # extracted_tweets.csv のファイル名を生成 (時分秒を含める)
-    extracted_tweets_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    extracted_tweets_filepath = os.path.join("output", f"extracted_tweets_{extracted_tweets_timestamp}.csv")
-
-    logging.info(f"ユーザー {test_user} のリプライを取得中... (Selenium)")
-    sample_replies = fetch_replies(test_user, extracted_tweets_filepath)
+def main():
+    # データベース初期化
+    db.init_db()
     
-    if sample_replies:
-        logging.info(f"過去72時間で {len(sample_replies)} 件のリプライを取得しました:")
-        # CSVファイル名の生成 (時分秒を含める)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = f"replies_log_{timestamp}.csv"
-        csv_filepath = os.path.join("log", csv_filename) # logフォルダ内に保存
-
+    # ログ設定
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('log/fetch.log', encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # 出力ディレクトリの作成
+    output_dir = Path('output')
+    output_dir.mkdir(exist_ok=True)
+    
+    # CSVファイル名の生成（実行開始時）
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_csv_path = output_dir / f'extracted_tweets_{timestamp}.csv'
+    
+    # fetch_replies関数を呼び出してリプライを取得
+    replies = fetch_replies(TARGET_USER, str(output_csv_path))
+    
+    # ログファイルの生成
+    if replies:
+        log_dir = Path('log')
+        log_dir.mkdir(exist_ok=True)
+        csv_filepath = log_dir / f'replies_log_{timestamp}.csv'
+        fieldnames = ["reply_id", "UserID", "Name", "date_time", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
         with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ["tweet_id", "replier_id", "content", "tweet_datetime", "reply_count", "like_count"]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
             writer.writeheader()
-            for reply in sample_replies:
-                # datetimeオブジェクトをISOフォーマット文字列に変換
-                reply['tweet_datetime'] = reply['tweet_datetime'].isoformat()
+            for reply in replies:
                 writer.writerow(reply)
-        logging.info(f"リプライログを {csv_filepath} に書き出しました。")
-
-        for reply in sample_replies[:5]: # 最初の5件のみ表示
-            logging.info(f"Tweet ID: {reply.get('tweet_id')}, Replier ID: {reply.get('replier_id')}, Content: {reply.get('content')}, Datetime: {reply.get('tweet_datetime')}, Reply Count: {reply.get('reply_count')}, Like Count: {reply.get('like_count')}")
+        for reply in replies[:5]:
+            logging.info(f"Reply ID: {reply.get('reply_id')}, User ID: {reply.get('UserID')}, Name: {reply.get('Name')}, Content: {reply.get('contents')}, DateTime: {reply.get('date_time')}, Reply Count: {reply.get('reply_num')}, Like Count: {reply.get('like_num')}, Is My Thread: {reply.get('is_my_thread')}")
     else:
-        logging.info(f"過去72時間で {test_user} のリプライは見つかりませんでした。") 
+        logging.info(f"過去72時間で {TARGET_USER} のリプライは見つかりませんでした。")
+
+if __name__ == "__main__":
+    main() 
