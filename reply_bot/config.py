@@ -1,7 +1,7 @@
 # reply_bot/config.py の例
-TARGET_USER   = "nyukimi_AI"  # あなたのXユーザー名（@は不要）
+TARGET_USER   = "Maya19960330"  # あなたのXユーザー名（@は不要）
 LOGIN_URL     = "https://x.com/login"
-USERNAME      = "nyukimi_AI" # Xのログインに使用するユーザー名またはメールアドレス
+USERNAME      = "Maya19960330" # Xのログインに使用するユーザー名またはメールアドレス
 PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
 OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
 DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
@@ -14,6 +14,11 @@ MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
 LOGIN_TIMEOUT_ENABLED = False   # ログインタイムアウトを有効にするかどうか（True/False）
 LOGIN_TIMEOUT_SECONDS = 60     # ログインタイムアウト時間（秒）（デフォルト: 60秒）
 PAGE_LOAD_TIMEOUT_SECONDS = 30 # ページ読み込みタイムアウト時間（秒）（デフォルト: 30秒）
+
+# 返信優先度設定
+PRIORITY_REPLY_ENABLED = False  # 優先度付けを有効にするか (True/False)
+MAX_MY_THREAD_REPLIES = 5       # 自分のスレッドから取得する最大リプライ数
+MAX_OTHER_THREAD_REPLIES = 3    # 他人のスレッドから取得する最大リプライ数
 
 # タイムアウト設定の詳細説明:
 # - LOGIN_TIMEOUT_ENABLED: Trueにするとタイムアウト機能が有効になり、Falseにすると無効になります

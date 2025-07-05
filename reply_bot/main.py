@@ -1,63 +1,72 @@
-import asyncio
 import logging
-import time
-from .config import TARGET_USER
-from .db import init_db, purge_old, is_replied, mark_replied
-from .fetch import fetch_replies
-from .gen_reply import generate
-from .post_reply import post_reply # 関数名をpost_replyに統一
+import os
+from datetime import datetime
+
+# 各モジュールのメイン処理関数をインポート
+from .csv_generator import main_process as csv_generator_main
+from .thread_checker import main_process as thread_checker_main
+from .gen_reply import main_process as gen_reply_main
+from .post_reply import main_process as post_reply_main
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-async def main():
+def main():
     """
-    自動返信システムのメイン処理です。
-    データベースの初期化、古いデータの削除、リプライの取得、
-    応答文の生成、返信の投稿、返信済みのマークを行います。
+    自動返信システムのメイン処理フローを制御します。
     """
-    logging.info("自動返信システムを開始します。")
-    init_db()
-    purge_old(hours=24)
-    logging.info("データベースの初期化と古いデータの削除が完了しました。")
-
-    # CSVファイル名の生成（実行開始時）
-    from datetime import datetime
-    from pathlib import Path
+    logging.info("=== 自動返信システムを開始します ===")
     
-    output_dir = Path('output')
-    output_dir.mkdir(exist_ok=True)
+    # --------------------------------------------------------------------------
+    # ステップ1: 通知ページからリプライを取得し、CSVを生成
+    # --------------------------------------------------------------------------
+    logging.info("--- [ステップ1/4] リプライの取得とCSV生成を開始します ---")
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_csv_path = output_dir / f'extracted_tweets_{timestamp}.csv'
+    initial_csv_path_template = os.path.join('output', f'extracted_tweets_{timestamp}.csv')
     
-    replies = fetch_replies(TARGET_USER, str(output_csv_path))
-    logging.info(f"新たに {len(replies)} 件のリプライを取得しました。")
+    initial_csv_path = csv_generator_main(initial_csv_path_template)
+    
+    if not initial_csv_path or not os.path.exists(initial_csv_path):
+        logging.error("ステップ1でCSVファイルが生成されませんでした。処理を中断します。")
+        return
+    logging.info(f"リプライ一覧を {initial_csv_path} に保存しました。")
+    
+    
+    # --------------------------------------------------------------------------
+    # ステップ2: スレッドの起点が自分か判定
+    # --------------------------------------------------------------------------
+    logging.info("--- [ステップ2/4] スレッド起点の判定を開始します ---")
+    rechecked_csv_path = thread_checker_main(initial_csv_path)
+    
+    if not rechecked_csv_path or not os.path.exists(rechecked_csv_path):
+        logging.warning("ステップ2で判定済みCSVファイルが生成されませんでした。後続処理をスキップします。")
+        logging.info("=== 自動返信システムを終了します ===")
+        return
+    logging.info(f"スレッド起点の判定結果を {rechecked_csv_path} に保存しました。")
+        
 
-    for r in replies:
-        rid = r["reply_id"]
-        if not is_replied(rid):
-            logging.info(f"未返信リプライを検出しました: {rid}")
-            try:
-                # fetch.pyの戻り値の構造に合わせて修正
-                reply_text = generate(r["contents"], r["UserID"], "ja", None)  # 言語は日本語固定
-                logging.info(f"応答文を生成しました。内容: {reply_text[:50]}...")
+    # --------------------------------------------------------------------------
+    # ステップ3: AIによる返信文の生成
+    # --------------------------------------------------------------------------
+    logging.info("--- [ステップ3/4] AIによる返信文の生成を開始します ---")
+    generated_csv_path = gen_reply_main(rechecked_csv_path)
 
-                # Playwrightでの投稿は非同期処理のためawait
-                await post_reply(r["reply_id"], rid, reply_text)  # tweet_idをreply_idに変更
-                mark_replied(rid, r["UserID"], reply_text, r.get("is_my_thread", False))
-                logging.info(f"リプライ {rid} を投稿し、返信済みとしてマークしました。")
-                
-                # 複数回投稿の間に10秒の間隔を空ける
-                logging.info("次の投稿まで10秒待機します...")
-                time.sleep(10)
+    if not generated_csv_path or not os.path.exists(generated_csv_path):
+        logging.warning("ステップ3で返信生成済みCSVファイルが見つかりませんでした。後続処理をスキップします。")
+        logging.info("=== 自動返信システムを終了します ===")
+        return
+    logging.info(f"AIによる返信文を {generated_csv_path} に保存しました。")
 
-            except Exception as e:
-                logging.error(f"リプライ {rid} の処理中にエラーが発生しました: {e}")
-        else:
-            logging.info(f"リプライ {rid} はすでに返信済みです。スキップします。")
 
-    logging.info("自動返信システムが完了しました。")
+    # --------------------------------------------------------------------------
+    # ステップ4: いいね＆返信投稿 (デフォルトはドライラン)
+    # --------------------------------------------------------------------------
+    logging.info("--- [ステップ4/4] いいねと返信の投稿処理を開始します ---")
+    # ここでは常にドライランで実行する。ライブ実行は手動を想定。
+    post_reply_main(generated_csv_path, dry_run=True)
+    
+    logging.info("=== 全ての処理が正常に完了しました ===")
+
 
 if __name__ == "__main__":
-    # main関数は非同期なので、asyncio.run()で実行
-    asyncio.run(main()) 
+    main() 

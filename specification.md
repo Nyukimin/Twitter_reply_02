@@ -1,170 +1,127 @@
-# Maya自動返信ボット仕様書（スレッド起点判定対応）
+# Maya自動返信ボット 仕様書 (v2.0 - モジュール分割版)
 
-## 目的
-本システムは、X（旧Twitter）上で「Maya（@Maya19960330）」アカウントに届いたリプライに対して、未返信のものへ自動的に返信を投稿することを目的とする。  
-さらに、**リプライがスレッド形式（会話の途中）である場合、その起点となる元ツイートが自分（Maya）の投稿であるかどうかをたどって確認する機能**を持つ。
+## 1. 目的
 
----
+本システムは、X（旧Twitter）上で「Maya（@Maya19960330）」アカウントに届いたメンション（リプライ）の中から、**自身の投稿を起点とするスレッドへの返信**を自動で特定し、AIによる返信文を生成、投稿準備までを行うことを目的とします。
 
-## 全体構成
+## 2. システムアーキテクチャ
 
-### 1. リプライ収集
-- 利用ライブラリ：`selenium` によるブラウザ自動操作（`snscrape` は使用しない）
-- 操作対象：Twitterの通知ページ（https://twitter.com/notifications/mentions）
-- 処理内容：
-  - リプライ一覧を抽出
-  - HTML構造から以下を取得：
-    - リプライしたユーザーID
-    - リプライ本文
-    - リプライ元ツイートのURL、ツイートID
-    - **そのリプライ元がさらにリプライである場合、順にたどる**
-    - **スレッドの最初のツイート（起点）が自分の投稿かどうかを判定**
-  - **各スクロール後のHTMLソースを `/source/debug_page_source_NNN.html` (3桁の連番) の形式で保存する**
-  - **重複するリプライIDをスキップし、既に処理済みのリプライは再度追加しない**
-  - **抽出結果は `/output/extracted_tweets_YYYYMMDD_HHMMSS.csv` ファイルに、実行開始時に一度だけ作成され、追記モードで保存される**
-  - **スクロール量は、ウィンドウの高さの80%をスクロールすることで20%の重複を目指す（適応的調整は今後の検討課題）**
+本システムは、複数の独立したPythonモジュールが、**CSVファイルを介して**順番に処理を受け渡すパイプラインアーキテクチャを採用しています。これにより、各ステップの責務が明確になり、デバッグや仕様変更が容易になります。
 
-#### 1.1. 0ページ目（初回ページ）処理
-- **通知ページアクセス後、5秒待機**してページの完全ロードを確保
-- **0ページ目のHTMLソースを `/source/debug_page_source_000.html` として保存**
-- **0ページ目のデータ抽出・CSV出力**を実行
-- **重複チェック**も0ページ目で適用
+```mermaid
+graph TD;
+    A[Start] --> B(1. csv_generator.py);
+    B -- extracted_tweets_...csv --> C(2. thread_checker.py);
+    C -- priority_replies_...csv --> D(3. gen_reply.py);
+    D -- generated_replies_...csv --> E(4. post_reply.py);
+    E --> F[End];
 
-#### 1.2. スクロール設定
-- **最大スクロール回数：100回（config.pyで設定可能）**
-- **引数化対応**：`fetch_replies(target_user, output_csv_path, max_scrolls=100)`
-- **main関数引数化**：`main(max_scrolls=100)`
-- **設定ファイル連携**：`config.py`の`MAX_SCROLLS`でデフォルト値管理
+    subgraph "制御"
+        G(main.py)
+    end
 
-### 2. 起点ツイート判定ロジック
-- 対象リプライが「リプライ to リプライ」であれば、`in_reply_to_status_id` をたどる
-- 最終的にたどり着いた「起点ツイート」の投稿者が `@Maya19960330` かを確認
-- 判定結果を元に、返信方針を以下のように分岐する：
-
-| スレッド起点 | 返信方針 |
-|--------------|----------|
-| Mayaの投稿   | 通常どおり返信する（関与OK） |
-| 他人の投稿   | 返信を控える、または内容を柔らかく調整する |
-
----
-
-## 3. 未返信判定
-- 利用：`replies.db`（SQLite）に記録された返信済みデータと照合
-- 一致条件：ツイートIDがDBに存在しない場合 → 未返信とみなす
-
----
-
-## 4. 自動返信文の生成
-- 使用モジュール：`gen_reply.py`
-- 返信のトーン：Mayaの人格（癒し・自然・少し色気）に基づく
-- **起点が他人の場合は、あえて「敬語のみ」「丁寧だが薄めの反応」などに切り替えることも可能**
-
----
-
-## 5. Seleniumによる投稿とCookie認証
-
-- Cookieは `.pkl` ファイルで保存（初回は `get_cookie.py` にて手動ログイン後に取得）
-- 投稿処理は `post_reply.py` にて行い、ログイン状態を維持したままツイートに返信
-
----
-
-## データベース構成（replies.db）
-
-| カラム名       | 内容                             |
-|----------------|----------------------------------|
-| tweet_id       | リプライ対象のツイートID（数値）   |
-| user_id        | ユーザーIDまたはスクリーンネーム     |
-| reply_text     | 返信した本文                       |
-| is_my_thread   | boolean（True = 起点が自分）        |
-| timestamp      | 投稿日時（ISOフォーマット）         |
-
----
-
-## 設定ファイル（config.py）
-
-### 基本設定
-```python
-TARGET_USER   = "nyukimi_AI"  # 対象ユーザー名
-MAX_SCROLLS   = 100           # 最大スクロール回数
+    G -.-> B;
+    G -.-> C;
+    G -.-> D;
+    G -.-> E;
 ```
 
-### スクロール設定
-- **デフォルト値**：100回
-- **設定方法**：`config.py`の`MAX_SCROLLS`で変更
-- **実行時指定**：`main(max_scrolls=50)`で個別指定可能
+---
+
+## 3. モジュール詳細
+
+### ステップ1: リプライ収集 (`csv_generator.py`)
+
+-   **入力**: なし
+-   **処理**:
+    -   Seleniumを起動し、Cookieを使ってXにログインします。
+    -   通知ページ (`https://x.com/notifications/mentions`) にアクセスします。
+    -   ページを複数回スクロールし、表示されるすべてのメンション（リプライ）のHTMLを取得します。
+    -   取得したHTMLから、以下の情報を抽出します。
+        -   リプライ自身のID (`reply_id`)
+        -   リプライ投稿者のユーザーID (`user_id`) と名前 (`user_name`)
+        -   リプライ本文 (`text`)
+        -   投稿日時 (`created_at`)
+-   **出力**: `output/extracted_tweets_{タイムスタンプ}.csv`
+    -   上記で抽出した情報をまとめたCSVファイル。これがパイプラインの起点となります。
+
+### ステップ2: スレッド起点判定 (`thread_checker.py`)
+
+-   **入力**: `extracted_tweets_...csv`
+-   **処理**:
+    -   入力CSVの各行（各リプライ）について、そのリプライのURLにSeleniumでアクセスします。
+    -   ページを解析し、会話スレッドの**一番大元の投稿者**のユーザーIDを特定します。
+    -   特定した大元投稿者のIDが、`config.py`で設定された自分自身のID (`TARGET_USER`) と一致するかを判定します。
+    -   判定結果を `is_my_thread` (True/False) という新しい列に追加します。
+-   **出力**: `output/priority_replies_rechecked_{タイムスタンプ}.csv`
+    -   `is_my_thread` 列が追加されたCSVファイル。
+
+### ステップ3: 返信文生成 (`gen_reply.py`)
+
+-   **入力**: `priority_replies_rechecked_...csv`
+-   **処理**:
+    -   `is_my_thread` が `True` のリプライのみを対象とします。
+    -   対象リプライの本文と、`config.py` の `MAYA_PERSONALITY_PROMPT` を使用して、OpenAIのAPI (GPT-4o-mini) にリクエストを送信します。
+    -   AIによって生成された返信文を取得し、`generated_reply` という新しい列に追加します。
+-   **出力**: `output/generated_replies_{タイムスタンプ}.csv`
+    -   `generated_reply` 列が追加されたCSVファイル。
+
+### ステップ4: 投稿処理 (`post_reply.py`)
+
+-   **入力**: `generated_replies_...csv`
+-   **処理**:
+    -   **ドライランモード (デフォルト)**:
+        -   実際には投稿せず、「どのツイートに、どのような内容で返信し、いいねを押すか」という計画をログに出力するだけです。
+    -   **ライブモード (`--live-run` フラグ指定時)**:
+        -   **【注意】実際にXへの投稿が行われます。**
+        -   CSVの各行について、Seleniumで対象ツイートページにアクセスします。
+        -   ツイートに「いいね」をします。
+        -   `generated_reply` 列のテキストを使って、返信を投稿します。
+-   **出力**: なし (ログ出力のみ)
+
+### 統括制御 (`main.py`)
+
+-   **役割**: 上記のステップ1〜4のモジュールを順番に呼び出し、処理全体の流れを制御します。
+-   **実行方法**: `python -m reply_bot.main` コマンドで実行します。
+-   **処理フロー**:
+    1.  `csv_generator.py` を実行し、出力されたCSVパスを取得します。
+    2.  取得したパスを `thread_checker.py` に渡し、次のCSVパスを取得します。
+    3.  取得したパスを `gen_reply.py` に渡し、さらに次のCSVパスを取得します。
+    4.  最終的なCSVパスを `post_reply.py` に渡して実行します（常にドライランモード）。
 
 ---
 
-## スケジュール実行
-- 毎日1回またはN分ごとの実行を想定（`main.py`からバッチ起動可能）
-- 実行後にログファイル（`/log/replies_log_YYYYMMDD_HHMMSS.csv`）に処理履歴を保存
+## 4. 設定ファイル (`config.py`)
+
+システムの動作に関わる各種設定をこのファイルで管理します。
+
+-   `TARGET_USER`: 自分自身のXユーザーID (`@`なし)
+-   `USERNAME`, `PASSWORD`: ログイン情報
+-   `OPENAI_API_KEY`: OpenAIのAPIキー
+-   `MAX_SCROLLS`: `csv_generator`での最大スクロール回数
+-   `PRIORITY_REPLY_ENABLED`: `thread_checker`で、自分のスレッドへの返信を優先して件数を絞る機能のON/OFF
+-   `MAYA_PERSONALITY_PROMPT`: `gen_reply`でAIに与える人格設定プロンプト
 
 ---
 
-## フォルダ構成例
+## 5. フォルダ構成
 
 ```
 Twitter_reply/
 ├── reply_bot/
-│   ├── main.py
-│   ├── fetch.py（Selenium使用、スレッド判定含む）
-│   ├── gen_reply.py
-│   ├── post_reply.py
-│   ├── get_cookie.py
-│   ├── db.py
-│   ├── config.py
-│   ├── ...
+│   ├── main.py               # 統括制御
+│   ├── csv_generator.py      # Step 1
+│   ├── thread_checker.py     # Step 2
+│   ├── gen_reply.py          # Step 3
+│   ├── post_reply.py         # Step 4
+│   ├── utils.py              # 共通関数 (WebDriverセットアップなど)
+│   ├── config.py             # 設定ファイル
+│   └── ...
 ├── cookie/
-│   └── twitter_cookies_01.pkl
-├── log/
-│   └── replies_log_YYYYMMDD_HHMMSS.csv （ログファイル、Git追跡対象外）
-├── source/
-│   ├── debug_page_source_000.html （0ページ目、Git追跡対象外）
-│   └── debug_page_source_NNN.html （スクロール後、Git追跡対象外）
-├── output/
-│   └── extracted_tweets_YYYYMMDD_HHMMSS.csv （抽出されたツイートデータ、Git追跡対象外）
+│   └── twitter_cookies_01.pkl # ログインセッション
+├── output/                    # 各ステップのCSVが出力される (Git追跡対象外)
+│   ├── extracted_tweets_...csv
+│   ├── priority_replies_...csv
+│   └── generated_replies_...csv
 └── requirements.txt
 ```
-
----
-
-## 処理フロー詳細
-
-### 1. 初期化処理
-```
-1. データベース初期化（db.init_db()）
-2. ログ設定
-3. 出力ディレクトリ作成
-4. CSVファイル名生成
-```
-
-### 2. 0ページ目処理
-```
-1. 通知ページアクセス
-2. WebDriverWaitでツイート要素確認（30秒タイムアウト）
-3. 5秒待機（ページ完全ロード）
-4. HTML保存（debug_page_source_000.html）
-5. データ抽出・CSV出力
-6. 重複チェック
-```
-
-### 3. スクロール処理
-```
-1. スクロール実行（ウィンドウ高さの80%）
-2. 5秒待機（コンテンツロード）
-3. HTML保存（debug_page_source_001.html, 002.html, ...）
-4. データ抽出・CSV出力
-5. 重複チェック
-6. 最大スクロール回数または新コンテンツなしで停止
-```
-
----
-
-## 使用ライブラリ
-
-- `selenium`
-- `beautifulsoup4`
-- `sqlite3`
-- `openai`（任意）
-- `pytz`（タイムゾーン処理）
-- `pathlib`（ファイルパス処理）

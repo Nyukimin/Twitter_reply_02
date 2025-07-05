@@ -1,3 +1,7 @@
 /log/
 /source/
-/output/ 
+/output/
+__pycache__/
+*.pyc
+cookie/
+.DS_Store 

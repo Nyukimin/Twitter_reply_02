@@ -6,13 +6,9 @@ import time
 import re
 import csv
 import pytz
-import pickle
+import argparse
 from pathlib import Path
 
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -20,8 +16,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from .config import TARGET_USER, MAX_SCROLLS, LOGIN_TIMEOUT_ENABLED, LOGIN_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT_SECONDS
-from .get_cookie import load_cookies_and_navigate # load_cookies_and_navigate をインポート
-from . import db  # データベースモジュールをインポート
+from .utils import setup_driver # 共通のWebDriverセットアップをインポート
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -146,30 +141,27 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
         return None
 
-def fetch_tweet_content(tweet_id: str) -> str | None:
+def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> str | None:
     """
-    今回はSeleniumベースで実装するため、この関数は直接使用されませんが、
-    将来的にはツイート詳細ページからコンテンツを取得するロジックをここに追加可能です。
-    現時点では None を返します。
-    """
-    return None
-
-def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> list[dict]:
-    """
-    Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得します。
+    Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得し、CSVリストを生成します。
     Twitterの通知ページからリプライ一覧を抽出し、スクロールしながらHTMLを保存し、
     重複をスキップしてリプライ情報をCSVにエクスポートします。
     
     Args:
-        target_user: 対象ユーザー名
         output_csv_path: 出力CSVファイルパス
         max_scrolls: 最大スクロール回数（デフォルト: 100）
+    
+    Returns:
+        str | None: 生成されたCSVファイルのパス。失敗した場合はNone。
     """
+    # 出力ディレクトリの作成
+    output_dir = os.path.dirname(output_csv_path)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
     replies_data = []
     processed_reply_ids = set()
     csv_header_written = False
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # output_csv_path = f"output/extracted_tweets_{timestamp}.csv" # CSV出力パスを定義
 
     # CSVファイルが既に存在する場合はヘッダーを書き込まない (追記モード)
     if os.path.exists(output_csv_path):
@@ -180,40 +172,10 @@ def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX
 
     driver = None
     try:
-        # WebDriverのセットアップ
-        options = webdriver.ChromeOptions()
-        # options.add_argument('--headless')  # デバッグのため一時的にコメントアウト
-        options.add_argument('--no-sandbox')
-        options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--log-level=3') # INFOレベル以上のログのみ表示
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
-        
-        # ページ読み込みタイムアウトを設定
-        if LOGIN_TIMEOUT_ENABLED:
-            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
-            logging.info(f"ページ読み込みタイムアウト設定: {PAGE_LOAD_TIMEOUT_SECONDS}秒")
-        else:
-            logging.info("ページ読み込みタイムアウトが無効化されています。")
-        
-        logging.info("Selenium WebDriverを起動しました。")
-
-        # Cookieを読み込み、ブラウザにセットします
-        logging.info("Cookieを読み込み、ブラウザにセットします")
-        cookie_file_path = os.path.join('cookie', 'twitter_cookies_01.pkl')
-        if os.path.exists(cookie_file_path):
-            with open(cookie_file_path, 'rb') as f:
-                cookies = pickle.load(f)
-            # ドメインを指定してCookieを追加
-            driver.get("https://x.com/") # ドメインにアクセスしてCookieを設定できるようにする
-            for cookie in cookies:
-                # Seleniumに設定する前に、'expiry'キーを削除または変換する
-                if 'expiry' in cookie: # datetimeオブジェクトをタイムスタンプに変換
-                    cookie['expiry'] = int(cookie['expiry']) if isinstance(cookie['expiry'], datetime) else cookie['expiry']
-                driver.add_cookie(cookie)
-            logging.info("Cookieをブラウザにセットしました。")
-        else:
-            logging.warning("Cookieファイルが見つかりません。ログインなしで続行します。")
+        driver = setup_driver(headless=False) # 動作確認のためヘッドフルで実行
+        if not driver:
+            logging.error("WebDriverのセットアップに失敗しました。")
+            return None
 
         # 通知ページにアクセス
         logging.info("通知ページにアクセス中: https://x.com/notifications/mentions")
@@ -328,59 +290,35 @@ def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX
         logging.info("すべてのスクロールと抽出が完了しました。")
 
     except Exception as e:
-        logging.error(f"エラーが発生しました: {e}")
+        logging.error(f"リプライ取得処理中に予期せぬエラーが発生しました: {e}", exc_info=True)
+        return None
     finally:
         if driver:
             driver.quit()
-        logging.info("Selenium WebDriverを終了しました。")
-    return replies_data
+            logging.info("Selenium WebDriverを終了しました。")
 
-def main(max_scrolls: int = MAX_SCROLLS):
-    """
-    メイン実行関数
-    
-    Args:
-        max_scrolls: 最大スクロール回数（デフォルト: 100）
-    """
-    # データベース初期化
-    db.init_db()
-    
-    # ログ設定
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler('log/fetch.log', encoding='utf-8'),
-            logging.StreamHandler()
-        ]
-    )
-    
-    # 出力ディレクトリの作成
-    output_dir = Path('output')
-    output_dir.mkdir(exist_ok=True)
-    
-    # CSVファイル名の生成（実行開始時）
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_csv_path = output_dir / f'extracted_tweets_{timestamp}.csv'
-    
-    # fetch_replies関数を呼び出してリプライを取得
-    replies = fetch_replies(TARGET_USER, str(output_csv_path), max_scrolls)
-    
-    # ログファイルの生成
-    if replies:
-        log_dir = Path('log')
-        log_dir.mkdir(exist_ok=True)
-        csv_filepath = log_dir / f'replies_log_{timestamp}.csv'
-        fieldnames = ["reply_id", "UserID", "Name", "date_time", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
-        with open(csv_filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for reply in replies:
-                writer.writerow(reply)
-        for reply in replies[:5]:
-            logging.info(f"Reply ID: {reply.get('reply_id')}, User ID: {reply.get('UserID')}, Name: {reply.get('Name')}, Content: {reply.get('contents')}, DateTime: {reply.get('date_time')}, Reply Count: {reply.get('reply_num')}, Like Count: {reply.get('like_num')}, Is My Thread: {reply.get('is_my_thread')}")
+    # 最終的なCSV書き込み
+    if replies_data:
+        try:
+            with open(output_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=replies_data[0].keys())
+                if not csv_header_written:
+                    writer.writeheader()
+                writer.writerows(replies_data)
+            logging.info(f"合計 {len(replies_data)} 件のリプライを {output_csv_path} に保存しました。")
+            return output_csv_path
+        except Exception as e:
+            logging.error(f"CSVファイルへの書き込み中にエラーが発生しました: {e}")
+            return None
     else:
-        logging.info(f"過去72時間で {TARGET_USER} のリプライは見つかりませんでした。")
+        logging.info("新しいリプライは見つかりませんでした。")
+        # 新しいリプライがなくても、ファイル自体は存在している可能性があるのでパスを返す
+        return output_csv_path
 
-if __name__ == "__main__":
-    main() 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Xの通知ページからリプライを取得し、CSVファイルに出力します。')
+    parser.add_argument('output_csv', type=str, help='出力するCSVファイルのパス (例: output/extracted_tweets.csv)')
+    
+    args = parser.parse_args()
+    
+    main_process(args.output_csv) 
