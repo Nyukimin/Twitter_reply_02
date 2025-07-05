@@ -3,7 +3,9 @@ import argparse
 import logging
 import time
 import os
+import pyperclip
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -31,7 +33,8 @@ def like_tweet(driver, tweet_id: str, dry_run: bool = True):
             logging.info(f"[DRY RUN] tweet_id: {tweet_id} に「いいね」をします。")
         else:
             logging.info(f"tweet_id: {tweet_id} に「いいね」をします。")
-            like_button.click()
+            # 他の要素にクリックが妨害される場合があるため、JavaScriptでクリック
+            driver.execute_script("arguments[0].click();", like_button)
             time.sleep(1) # アクション後の待機
 
     except Exception as e:
@@ -55,20 +58,26 @@ def post_reply_to_tweet(driver, tweet_id: str, reply_text: str, dry_run: bool = 
             logging.info(f"[DRY RUN] tweet_id: {tweet_id} に以下の内容で返信します:\n--- MOCK REPLY ---\n{reply_text}\n--------------------")
         else:
             logging.info(f"tweet_id: {tweet_id} に返信します...")
-            reply_input.send_keys(reply_text)
             
-            # 返信ボタンをクリック
-            reply_button_selector = '[data-testid="tweetButton"]'
-            reply_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, reply_button_selector)))
-            reply_button.click()
-            logging.info("返信を投稿しました。")
-            time.sleep(3) # アクション後の待機
+            # 絵文字（非BMP文字）入力のため、クリップボード経由でペーストする
+            pyperclip.copy(reply_text)
+            time.sleep(0.5) # クリップボードへのコピーを確実にするための待機
+            reply_input.send_keys(Keys.CONTROL, 'v')
+            time.sleep(0.5)
+
+            # 返信ボタンはクリックせず、Ctrl+Enterで投稿する
+            logging.info("Ctrl+Enterで返信を投稿します...")
+            reply_input.send_keys(Keys.CONTROL, Keys.ENTER)
+            
+            # ポストが送信されるまで十分な時間を待機する
+            logging.info("返信を投稿しました。処理が完了するまで10秒待機します...")
+            time.sleep(10)
             
     except Exception as e:
         logging.error(f"tweet_id: {tweet_id} への返信中にエラーが発生しました: {e}")
 
 
-def main_process(input_csv: str, dry_run: bool = True):
+def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None):
     """
     CSVを読み込み、各リプライに対して「いいね」と「返信」を行います。
     """
@@ -86,6 +95,11 @@ def main_process(input_csv: str, dry_run: bool = True):
     # generated_replyが空でない行に絞り込む
     replies_to_post = df.dropna(subset=['generated_reply']).copy()
     
+    # limitが指定されている場合は、処理件数を制限する
+    if limit is not None and limit > 0:
+        logging.info(f"処理件数を {limit} 件に制限します。")
+        replies_to_post = replies_to_post.head(limit)
+        
     if replies_to_post.empty:
         logging.info("投稿対象の返信が見つかりませんでした。")
         return
@@ -118,10 +132,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='生成された返信をXに投稿します。')
     parser.add_argument('input_csv', type=str, help='入力CSVファイルのパス (例: output/generated_replies_....csv)')
     parser.add_argument('--live-run', action='store_true', help='このフラグを立てると、実際に投稿やいいねを行います（ドライランを無効化）。')
+    parser.add_argument('--limit', type=int, default=None, help='処理するツイートの最大数を指定します。')
     
     args = parser.parse_args()
     
     # --live-run フラグがなければ dry_run は True
     is_dry_run = not args.live_run
     
-    main_process(args.input_csv, dry_run=is_dry_run) 
+    main_process(args.input_csv, dry_run=is_dry_run, limit=args.limit) 

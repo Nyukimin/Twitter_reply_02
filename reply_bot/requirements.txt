@@ -6,4 +6,5 @@ playwright
 selenium
 pytz
 pandas
-emoji 
+emoji
+pyperclip 
