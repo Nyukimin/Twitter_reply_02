@@ -14,72 +14,10 @@ from .utils import setup_driver
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def like_tweet(driver, tweet_id: str, dry_run: bool = True):
-    """
-    指定されたツイートIDのページに移動し、「いいね」します。
-    """
-    # 実際にはuser_idも必要だが、URL直接指定なら不要
-    tweet_url = f"https://x.com/any/status/{tweet_id}"
-    logging.info(f"ツイートページにアクセス中: {tweet_url}")
-    driver.get(tweet_url)
-    
-    try:
-        # "いいね"ボタンが表示されるまで待機
-        like_button_selector = '[data-testid="like"]'
-        wait = WebDriverWait(driver, 15)
-        like_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, like_button_selector)))
-        
-        if dry_run:
-            logging.info(f"[DRY RUN] tweet_id: {tweet_id} に「いいね」をします。")
-        else:
-            logging.info(f"tweet_id: {tweet_id} に「いいね」をします。")
-            # 他の要素にクリックが妨害される場合があるため、JavaScriptでクリック
-            driver.execute_script("arguments[0].click();", like_button)
-            time.sleep(1) # アクション後の待機
-
-    except Exception as e:
-        logging.error(f"tweet_id: {tweet_id} の「いいね」中にエラーが発生しました: {e}")
-
-def post_reply_to_tweet(driver, tweet_id: str, reply_text: str, dry_run: bool = True):
-    """
-    指定されたツイートIDのページに移動し、返信を投稿します。
-    """
-    tweet_url = f"https://x.com/any/status/{tweet_id}"
-    logging.info(f"返信対象のツイートページにアクセス中: {tweet_url}")
-    driver.get(tweet_url)
-
-    try:
-        # 返信入力欄が表示されるまで待機
-        reply_input_selector = '[data-testid="tweetTextarea_0"]'
-        wait = WebDriverWait(driver, 15)
-        reply_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, reply_input_selector)))
-        
-        if dry_run:
-            logging.info(f"[DRY RUN] tweet_id: {tweet_id} に以下の内容で返信します:\n--- MOCK REPLY ---\n{reply_text}\n--------------------")
-        else:
-            logging.info(f"tweet_id: {tweet_id} に返信します...")
-            
-            # 絵文字（非BMP文字）入力のため、クリップボード経由でペーストする
-            pyperclip.copy(reply_text)
-            time.sleep(0.5) # クリップボードへのコピーを確実にするための待機
-            reply_input.send_keys(Keys.CONTROL, 'v')
-            time.sleep(0.5)
-
-            # 返信ボタンはクリックせず、Ctrl+Enterで投稿する
-            logging.info("Ctrl+Enterで返信を投稿します...")
-            reply_input.send_keys(Keys.CONTROL, Keys.ENTER)
-            
-            # ポストが送信されるまで十分な時間を待機する
-            logging.info("返信を投稿しました。処理が完了するまで10秒待機します...")
-            time.sleep(10)
-            
-    except Exception as e:
-        logging.error(f"tweet_id: {tweet_id} への返信中にエラーが発生しました: {e}")
-
-
 def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None):
     """
-    CSVを読み込み、各リプライに対して「いいね」と「返信」を行います。
+    CSVを読み込み、各リプライに対してページアクセスを1回に最適化し、
+    「いいね」と「返信」を行います。
     """
     if dry_run:
         logging.info("=== ドライランモードで実行します ===")
@@ -104,7 +42,7 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
         logging.info("投稿対象の返信が見つかりませんでした。")
         return
         
-    driver = setup_driver(headless=False) # 操作を確認するためヘッドフルで起動
+    driver = setup_driver(headless=False)
     if not driver:
         return
 
@@ -117,19 +55,58 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
             
             logging.info(f"--- 処理中: {index + 1}/{len(replies_to_post)} (tweet_id: {tweet_id}) ---")
             
-            # 1. like_numが0の場合のみ、いいねを押す
+            # 1. ページにアクセス (1ツイートにつき1回のみ)
+            tweet_url = f"https://x.com/any/status/{tweet_id}"
+            logging.info(f"ツイートページにアクセス中: {tweet_url}")
+            driver.get(tweet_url)
+            wait = WebDriverWait(driver, 15)
+
+            # 2. 「いいね」処理
             if like_num == 0:
-                like_tweet(driver, tweet_id, dry_run)
+                try:
+                    like_button_selector = '[data-testid="like"]'
+                    like_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, like_button_selector)))
+                    if dry_run:
+                        logging.info(f"[DRY RUN] tweet_id: {tweet_id} に「いいね」をします。")
+                    else:
+                        logging.info(f"tweet_id: {tweet_id} に「いいね」をします。")
+                        driver.execute_script("arguments[0].click();", like_button)
+                        time.sleep(1)
+                except Exception as e:
+                    logging.error(f"tweet_id: {tweet_id} の「いいね」中にエラーが発生しました: {e}")
             else:
                 logging.info(f"tweet_id: {tweet_id} は既に {like_num} 件の「いいね」があるため、スキップします。")
 
-            # 2. is_my_threadがTrueの場合のみ返信する
+            # 3. 返信処理
             if is_my_thread:
-                post_reply_to_tweet(driver, tweet_id, generated_reply, dry_run)
+                try:
+                    reply_input_selector = '[data-testid="tweetTextarea_0"]'
+                    reply_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, reply_input_selector)))
+                    
+                    if dry_run:
+                        logging.info(f"[DRY RUN] tweet_id: {tweet_id} に以下の内容で返信します:\n--- MOCK REPLY ---\n{generated_reply}\n--------------------")
+                    else:
+                        logging.info(f"tweet_id: {tweet_id} に返信します...")
+                        
+                        # 確実なフォーカスとペースト
+                        reply_input.click() 
+                        time.sleep(0.5)
+                        pyperclip.copy(generated_reply)
+                        reply_input.send_keys(Keys.CONTROL, 'v')
+                        time.sleep(0.5)
+
+                        logging.info("Ctrl+Enterで返信を投稿します...")
+                        reply_input.send_keys(Keys.CONTROL, Keys.ENTER)
+                        
+                        logging.info("返信を投稿しました。処理が完了するまで10秒待機します...")
+                        time.sleep(10)
+                except Exception as e:
+                    logging.error(f"tweet_id: {tweet_id} への返信中にエラーが発生しました: {e}")
             else:
                 logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信をスキップします。")
             
-            time.sleep(5) # 次の処理までのクールダウン
+            logging.info("次の処理までのクールダウン (5秒)")
+            time.sleep(5)
 
     finally:
         logging.info("全ての処理が完了しました。WebDriverを終了します。")
