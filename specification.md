@@ -24,6 +24,18 @@
   - **抽出結果は `/output/extracted_tweets_YYYYMMDD_HHMMSS.csv` ファイルに、実行開始時に一度だけ作成され、追記モードで保存される**
   - **スクロール量は、ウィンドウの高さの80%をスクロールすることで20%の重複を目指す（適応的調整は今後の検討課題）**
 
+#### 1.1. 0ページ目（初回ページ）処理
+- **通知ページアクセス後、5秒待機**してページの完全ロードを確保
+- **0ページ目のHTMLソースを `/source/debug_page_source_000.html` として保存**
+- **0ページ目のデータ抽出・CSV出力**を実行
+- **重複チェック**も0ページ目で適用
+
+#### 1.2. スクロール設定
+- **最大スクロール回数：100回（config.pyで設定可能）**
+- **引数化対応**：`fetch_replies(target_user, output_csv_path, max_scrolls=100)`
+- **main関数引数化**：`main(max_scrolls=100)`
+- **設定ファイル連携**：`config.py`の`MAX_SCROLLS`でデフォルト値管理
+
 ### 2. 起点ツイート判定ロジック
 - 対象リプライが「リプライ to リプライ」であれば、`in_reply_to_status_id` をたどる
 - 最終的にたどり着いた「起点ツイート」の投稿者が `@Maya19960330` かを確認
@@ -68,6 +80,21 @@
 
 ---
 
+## 設定ファイル（config.py）
+
+### 基本設定
+```python
+TARGET_USER   = "nyukimi_AI"  # 対象ユーザー名
+MAX_SCROLLS   = 100           # 最大スクロール回数
+```
+
+### スクロール設定
+- **デフォルト値**：100回
+- **設定方法**：`config.py`の`MAX_SCROLLS`で変更
+- **実行時指定**：`main(max_scrolls=50)`で個別指定可能
+
+---
+
 ## スケジュール実行
 - 毎日1回またはN分ごとの実行を想定（`main.py`からバッチ起動可能）
 - 実行後にログファイル（`/log/replies_log_YYYYMMDD_HHMMSS.csv`）に処理履歴を保存
@@ -92,10 +119,43 @@ Twitter_reply/
 ├── log/
 │   └── replies_log_YYYYMMDD_HHMMSS.csv （ログファイル、Git追跡対象外）
 ├── source/
-│   └── debug_page_source_NNN.html （HTMLソースファイル、Git追跡対象外）
+│   ├── debug_page_source_000.html （0ページ目、Git追跡対象外）
+│   └── debug_page_source_NNN.html （スクロール後、Git追跡対象外）
 ├── output/
 │   └── extracted_tweets_YYYYMMDD_HHMMSS.csv （抽出されたツイートデータ、Git追跡対象外）
 └── requirements.txt
+```
+
+---
+
+## 処理フロー詳細
+
+### 1. 初期化処理
+```
+1. データベース初期化（db.init_db()）
+2. ログ設定
+3. 出力ディレクトリ作成
+4. CSVファイル名生成
+```
+
+### 2. 0ページ目処理
+```
+1. 通知ページアクセス
+2. WebDriverWaitでツイート要素確認（30秒タイムアウト）
+3. 5秒待機（ページ完全ロード）
+4. HTML保存（debug_page_source_000.html）
+5. データ抽出・CSV出力
+6. 重複チェック
+```
+
+### 3. スクロール処理
+```
+1. スクロール実行（ウィンドウ高さの80%）
+2. 5秒待機（コンテンツロード）
+3. HTML保存（debug_page_source_001.html, 002.html, ...）
+4. データ抽出・CSV出力
+5. 重複チェック
+6. 最大スクロール回数または新コンテンツなしで停止
 ```
 
 ---
@@ -106,3 +166,5 @@ Twitter_reply/
 - `beautifulsoup4`
 - `sqlite3`
 - `openai`（任意）
+- `pytz`（タイムゾーン処理）
+- `pathlib`（ファイルパス処理）

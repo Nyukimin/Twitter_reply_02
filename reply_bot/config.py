@@ -7,6 +7,9 @@ OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
 DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
 # GEMINI_API_KEY= "your-gemini-api-key" # Geminiを使用する場合
 
+# スクロール設定
+MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
+
 # Mayaのパーソナリティ設定（例：gen_reply.pyで利用）
 MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）での「Maya（32歳の癒し系女性アカウント）」として、リプライに対する自然な返信を生成してください,
 

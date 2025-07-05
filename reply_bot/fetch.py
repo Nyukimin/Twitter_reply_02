@@ -19,7 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-from .config import TARGET_USER
+from .config import TARGET_USER, MAX_SCROLLS
 from .get_cookie import load_cookies_and_navigate # load_cookies_and_navigate をインポート
 from . import db  # データベースモジュールをインポート
 
@@ -137,11 +137,16 @@ def fetch_tweet_content(tweet_id: str) -> str | None:
     """
     return None
 
-def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
+def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX_SCROLLS) -> list[dict]:
     """
     Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得します。
     Twitterの通知ページからリプライ一覧を抽出し、スクロールしながらHTMLを保存し、
     重複をスキップしてリプライ情報をCSVにエクスポートします。
+    
+    Args:
+        target_user: 対象ユーザー名
+        output_csv_path: 出力CSVファイルパス
+        max_scrolls: 最大スクロール回数（デフォルト: 100）
     """
     replies_data = []
     processed_reply_ids = set()
@@ -198,11 +203,49 @@ def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
         except TimeoutException:
             logging.warning("通知ページのロード中にタイムアウトしました。Seleniumは続行します。")
 
+        # 0ページ目（初回ページ）のデータ取得
+        logging.info("0ページ目（初回ページ）のデータ取得を開始します...")
+        time.sleep(5)  # 初回ページの完全ロードを待機
+        
+        # 0ページ目のHTMLソースを保存
+        initial_html_source = driver.page_source
+        debug_html_file_path = "source/debug_page_source_000.html"
+        with open(debug_html_file_path, "w", encoding="utf-8") as f:
+            f.write(initial_html_source)
+        logging.info(f"0ページ目のページソースを {debug_html_file_path} に保存しました。")
+
+        # 0ページ目のツイート要素を抽出
+        soup = BeautifulSoup(initial_html_source, 'html.parser')
+        initial_tweets = soup.find_all('article', {'data-testid': 'tweet'})
+        logging.info(f"0ページ目から {len(initial_tweets)} 個のツイート要素を検出しました。")
+
+        # 0ページ目のデータ抽出とCSV出力
+        for tweet_article in initial_tweets:
+            extracted_info = _extract_tweet_info(tweet_article)
+            if extracted_info:
+                reply_id = extracted_info.get("reply_id")
+                if reply_id and reply_id not in processed_reply_ids:
+                    replies_data.append(extracted_info)
+                    processed_reply_ids.add(reply_id)
+
+                    # CSVに書き込む (追記モード)
+                    fieldnames = ["UserID", "Name", "date_time", "reply_id", "reply_to", "contents", "reply_num", "like_num", "is_my_thread"]
+                    with open(output_csv_path, 'a', newline='', encoding='utf-8') as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        if not csv_header_written:
+                            writer.writeheader()
+                            csv_header_written = True
+                        writer.writerow(extracted_info)
+                elif reply_id:
+                    logging.info(f"重複するリプライIDをスキップしました: {reply_id}")
+
+        logging.info("0ページ目のデータ取得が完了しました。")
+
         # ページを下にスクロールしてすべてのツイートをロード
         scroll_count = 0
         while True:
             scroll_count += 1
-            logging.info(f"スクロール {scroll_count} 回目...")
+            logging.info(f"スクロール {scroll_count}/{max_scrolls} 回目...")
             current_html_source = driver.page_source
             
             # 各スクロール後にHTMLソースを連番で保存
@@ -246,8 +289,8 @@ def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
             new_height = driver.execute_script("return document.body.scrollHeight")
             
             # 新しいコンテンツがロードされなかった場合、または最大スクロール回数に達した場合に停止
-            if new_height == last_height or scroll_count >= 10: # 10回スクロールしたら停止
-                logging.info("ページがこれ以上スクロールできないか、最大スクロール回数に達したため、スクロールを停止します。")
+            if new_height == last_height or scroll_count >= max_scrolls:
+                logging.info(f"ページがこれ以上スクロールできないか、最大スクロール回数({max_scrolls}回)に達したため、スクロールを停止します。")
                 break
         
         logging.info("すべてのスクロールと抽出が完了しました。")
@@ -260,7 +303,13 @@ def fetch_replies(target_user: str, output_csv_path: str) -> list[dict]:
         logging.info("Selenium WebDriverを終了しました。")
     return replies_data
 
-def main():
+def main(max_scrolls: int = MAX_SCROLLS):
+    """
+    メイン実行関数
+    
+    Args:
+        max_scrolls: 最大スクロール回数（デフォルト: 100）
+    """
     # データベース初期化
     db.init_db()
     
@@ -283,7 +332,7 @@ def main():
     output_csv_path = output_dir / f'extracted_tweets_{timestamp}.csv'
     
     # fetch_replies関数を呼び出してリプライを取得
-    replies = fetch_replies(TARGET_USER, str(output_csv_path))
+    replies = fetch_replies(TARGET_USER, str(output_csv_path), max_scrolls)
     
     # ログファイルの生成
     if replies:
