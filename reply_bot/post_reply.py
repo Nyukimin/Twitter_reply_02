@@ -112,12 +112,16 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
         for index, row in replies_to_post.iterrows():
             tweet_id = row['reply_id']
             generated_reply = row['generated_reply']
+            like_num = row['like_num']
             
             logging.info(f"--- 処理中: {index + 1}/{len(replies_to_post)} (tweet_id: {tweet_id}) ---")
             
-            # 1. いいねを押す
-            like_tweet(driver, tweet_id, dry_run)
-            
+            # 1. like_numが0の場合のみ、いいねを押す
+            if like_num == 0:
+                like_tweet(driver, tweet_id, dry_run)
+            else:
+                logging.info(f"tweet_id: {tweet_id} は既に {like_num} 件の「いいね」があるため、スキップします。")
+
             # 2. 返信する
             post_reply_to_tweet(driver, tweet_id, generated_reply, dry_run)
             

@@ -1,4 +1,4 @@
-# Maya自動返信ボット 仕様書 (v2.0 - モジュール分割版)
+# Maya自動返信ボット 仕様書 (v2.1)
 
 ## 1. 目的
 
@@ -6,13 +6,18 @@
 
 ## 2. システムアーキテクチャ
 
-本システムは、複数の独立したPythonモジュールが、**CSVファイルを介して**順番に処理を受け渡すパイプラインアーキテクチャを採用しています。これにより、各ステップの責務が明確になり、デバッグや仕様変更が容易になります。
+本システムは、複数の独立したPythonモジュールが、**CSVファイルやSQLiteデータベースを介して**順番に処理を受け渡すパイプラインアーキテクチャを採用しています。
 
 ```mermaid
 graph TD;
+    subgraph "事前準備"
+        AA(add_user_preferences.py) --> DB[(user_preferences DB)];
+    end
+
     A[Start] --> B(1. csv_generator.py);
     B -- extracted_tweets_...csv --> C(2. thread_checker.py);
     C -- priority_replies_...csv --> D(3. gen_reply.py);
+    DB -.-> D;
     D -- generated_replies_...csv --> E(4. post_reply.py);
     E --> F[End];
 
@@ -30,77 +35,76 @@ graph TD;
 
 ## 3. モジュール詳細
 
+### ステップ0: ユーザー情報登録 (`add_user_preferences.py`)
+-   **入力**: なし（スクリプト内で直接編集）
+-   **処理**:
+    -   特定のユーザー（友人など）のUserIDと、返信時に使用したいニックネーム、使用言語を`user_preferences`テーブルに登録します。
+    -   このモジュールはパイプラインとは独立して、事前に手動で実行します。
+-   **出力**: `replies.db`へのレコード追加
+
 ### ステップ1: リプライ収集 (`csv_generator.py`)
 
 -   **入力**: なし
 -   **処理**:
     -   Seleniumを起動し、Cookieを使ってXにログインします。
-    -   通知ページ (`https://x.com/notifications/mentions`) にアクセスします。
-    -   ページを複数回スクロールし、表示されるすべてのメンション（リプライ）のHTMLを取得します。
-    -   取得したHTMLから、以下の情報を抽出します。
-        -   リプライ自身のID (`reply_id`)
-        -   リプライ投稿者のユーザーID (`user_id`) と名前 (`user_name`)
-        -   リプライ本文 (`text`)
-        -   投稿日時 (`created_at`)
+    -   通知ページ (`https://x.com/notifications/mentions`) にアクセスし、表示されるメンションから情報を抽出します。
+    -   抽出項目: `reply_id`, `user_id`, `user_name`, `text`, `created_at`, `lang`
 -   **出力**: `output/extracted_tweets_{タイムスタンプ}.csv`
-    -   上記で抽出した情報をまとめたCSVファイル。これがパイプラインの起点となります。
 
 ### ステップ2: スレッド起点判定 (`thread_checker.py`)
 
 -   **入力**: `extracted_tweets_...csv`
 -   **処理**:
-    -   入力CSVの各行（各リプライ）について、そのリプライのURLにSeleniumでアクセスします。
-    -   ページを解析し、会話スレッドの**一番大元の投稿者**のユーザーIDを特定します。
-    -   特定した大元投稿者のIDが、`config.py`で設定された自分自身のID (`TARGET_USER`) と一致するかを判定します。
-    -   判定結果を `is_my_thread` (True/False) という新しい列に追加します。
+    -   入力CSVの各リプライについて、スレッドの大元の投稿者が自分自身 (`TARGET_USER`) かを判定します。
+    -   判定結果を `is_my_thread` (True/False) 列に追加します。
 -   **出力**: `output/priority_replies_rechecked_{タイムスタンプ}.csv`
-    -   `is_my_thread` 列が追加されたCSVファイル。
 
 ### ステップ3: 返信文生成 (`gen_reply.py`)
 
--   **入力**: `priority_replies_rechecked_...csv`
+-   **入力**: `priority_replies_rechecked_...csv`, `replies.db`
 -   **処理**:
-    -   `is_my_thread` が `True` のリプライのみを対象とします。
-    -   対象リプライの本文と、`config.py` の `MAYA_PERSONALITY_PROMPT` を使用して、OpenAIのAPI (GPT-4o-mini) にリクエストを送信します。
-    -   AIによって生成された返信文を取得し、`generated_reply` という新しい列に追加します。
+    -   `is_my_thread` が `True` のリプライを対象とします。
+    -   リプライ投稿者のUserIDをキーに`user_preferences`テーブルを検索し、ニックネームが存在するか確認します。
+    -   **ニックネームがある場合**: プログラムで「{ニックネーム}\n」を先頭につけ、AIには呼びかけを含まない親しみやすい返信を生成させます。
+    -   **ニックネームがない場合**: AIに呼びかけなしの短い返信を生成させます。
+    -   AIモデルにはGoogleのGemini (`gemini-1.5-flash`) を使用します。
+    -   生成された返信文を `generated_reply` 列に追加します。
 -   **出力**: `output/generated_replies_{タイムスタンプ}.csv`
-    -   `generated_reply` 列が追加されたCSVファイル。
 
 ### ステップ4: 投稿処理 (`post_reply.py`)
 
 -   **入力**: `generated_replies_...csv`
 -   **処理**:
     -   **ドライランモード (デフォルト)**:
-        -   実際には投稿せず、「どのツイートに、どのような内容で返信し、いいねを押すか」という計画をログに出力するだけです。
+        -   実際には投稿せず、「どのツイートに、どのような内容で返信し、いいねを押すか」という計画をログに出力します。
     -   **ライブモード (`--live-run` フラグ指定時)**:
         -   **【注意】実際にXへの投稿が行われます。**
         -   CSVの各行について、Seleniumで対象ツイートページにアクセスします。
-        -   ツイートに「いいね」をします。
-        -   `generated_reply` 列のテキストを使って、返信を投稿します。
+        -   **`like_num`が0の場合に限り**、ツイートに「いいね」をします。
+        -   `generated_reply` 列のテキストを使って、返信を投稿します（`Ctrl+Enter`キーを使用）。
 -   **出力**: なし (ログ出力のみ)
 
 ### 統括制御 (`main.py`)
 
 -   **役割**: 上記のステップ1〜4のモジュールを順番に呼び出し、処理全体の流れを制御します。
--   **実行方法**: `python -m reply_bot.main` コマンドで実行します。
 -   **処理フロー**:
-    1.  `csv_generator.py` を実行し、出力されたCSVパスを取得します。
-    2.  取得したパスを `thread_checker.py` に渡し、次のCSVパスを取得します。
-    3.  取得したパスを `gen_reply.py` に渡し、さらに次のCSVパスを取得します。
-    4.  最終的なCSVパスを `post_reply.py` に渡して実行します（常にドライランモード）。
+    1.  `csv_generator.py` を実行
+    2.  `thread_checker.py` を実行
+    3.  `gen_reply.py` を実行
+    4.  `post_reply.py` を実行 (常にドライランモード)
 
 ---
 
-## 4. 設定ファイル (`config.py`)
+## 4. 設定ファイルとデータベース
 
-システムの動作に関わる各種設定をこのファイルで管理します。
-
+### 設定ファイル (`config.py`)
 -   `TARGET_USER`: 自分自身のXユーザーID (`@`なし)
 -   `USERNAME`, `PASSWORD`: ログイン情報
--   `OPENAI_API_KEY`: OpenAIのAPIキー
 -   `MAX_SCROLLS`: `csv_generator`での最大スクロール回数
--   `PRIORITY_REPLY_ENABLED`: `thread_checker`で、自分のスレッドへの返信を優先して件数を絞る機能のON/OFF
 -   `MAYA_PERSONALITY_PROMPT`: `gen_reply`でAIに与える人格設定プロンプト
+
+### データベース (`replies.db`)
+-   **`user_preferences`テーブル**: ニックネームや言語など、ユーザーごとの設定を保存します。
 
 ---
 
@@ -109,19 +113,18 @@ graph TD;
 ```
 Twitter_reply/
 ├── reply_bot/
-│   ├── main.py               # 統括制御
-│   ├── csv_generator.py      # Step 1
-│   ├── thread_checker.py     # Step 2
-│   ├── gen_reply.py          # Step 3
-│   ├── post_reply.py         # Step 4
-│   ├── utils.py              # 共通関数 (WebDriverセットアップなど)
-│   ├── config.py             # 設定ファイル
-│   └── ...
+│   ├── main.py
+│   ├── csv_generator.py
+│   ├── thread_checker.py
+│   ├── gen_reply.py
+│   ├── post_reply.py
+│   ├── add_user_preferences.py
+│   ├── utils.py
+│   ├── config.py
+│   └── replies.db              # ユーザー情報などを格納
 ├── cookie/
-│   └── twitter_cookies_01.pkl # ログインセッション
-├── output/                    # 各ステップのCSVが出力される (Git追跡対象外)
-│   ├── extracted_tweets_...csv
-│   ├── priority_replies_...csv
-│   └── generated_replies_...csv
+│   └── twitter_cookies_01.pkl
+├── output/
+│   └── (各種CSVファイル)
 └── requirements.txt
 ```
