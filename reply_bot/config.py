@@ -10,6 +10,17 @@ DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
 # スクロール設定
 MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
 
+# タイムアウト設定
+LOGIN_TIMEOUT_ENABLED = False   # ログインタイムアウトを有効にするかどうか（True/False）
+LOGIN_TIMEOUT_SECONDS = 60     # ログインタイムアウト時間（秒）（デフォルト: 60秒）
+PAGE_LOAD_TIMEOUT_SECONDS = 30 # ページ読み込みタイムアウト時間（秒）（デフォルト: 30秒）
+
+# タイムアウト設定の詳細説明:
+# - LOGIN_TIMEOUT_ENABLED: Trueにするとタイムアウト機能が有効になり、Falseにすると無効になります
+# - LOGIN_TIMEOUT_SECONDS: 通知ページのロードを待機する時間（秒）です。ネットワークが遅い場合は値を大きくしてください
+# - PAGE_LOAD_TIMEOUT_SECONDS: ページ全体の読み込みを待機する時間（秒）です。通常はLOGIN_TIMEOUT_SECONDSより短く設定します
+# - タイムアウトが発生した場合でも、Seleniumは処理を続行します（エラーにはなりません）
+
 # Mayaのパーソナリティ設定（例：gen_reply.pyで利用）
 MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）での「Maya（32歳の癒し系女性アカウント）」として、リプライに対する自然な返信を生成してください,
 

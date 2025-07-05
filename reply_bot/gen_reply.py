@@ -19,7 +19,7 @@ def generate(reply_text: str, replier_id: str = None, lang: str = "en", original
     Returns:
         str: 生成された応答文。
     """
-    # ja以外の言語の場合、固定の「ありがとう」メッセージを返す、または❤を返す
+    # ja以外の言語の場合、固定の「ありがとう」メッセージを返す、または❤️を返す
     if lang != "ja":
         if lang in THANK_YOU_PHRASES and isinstance(THANK_YOU_PHRASES[lang], list):
             selected_phrase = random.choice(THANK_YOU_PHRASES[lang])
@@ -48,12 +48,12 @@ def generate(reply_text: str, replier_id: str = None, lang: str = "en", original
     if nickname:
         # 近しい間柄の場合のプロンプトと出力形式
         prompt_parts.append(
-            f"【出力形式】\n@{replier_id} {nickname} + 私のツイート文と相手のツイート文を加味した短い回答文（15〜35文字前後）を記述し、語尾に❤を付けてください。絵文字は言葉の途中に入れないでください。"
+            f"【出力形式】\n@{replier_id} {nickname} + 私のツイート文と相手のツイート文を加味した短い回答文（15〜35文字前後）を記述し、語尾に❤️を付けてください。絵文字は言葉の途中に入れないでください。"
         )
     else:
         # 一般的なプロンプトと出力形式
         prompt_parts.append(
-            f"【出力形式】\n@{replier_id}さん 〇〇ちゃん（またはさん・くん）＋自然な返答（15〜35文字前後）, 絵文字は文末に配置し、言葉の途中に入れないこと,語尾に❤を付けてください。"
+            f"【出力形式】\n@{replier_id}さん 〇〇ちゃん（またはさん・くん）＋自然な返答（15〜35文字前後）, 絵文字は文末に配置し、言葉の途中に入れないこと,語尾に❤️を付けてください。"
         )
     
     prompt = "\n".join(prompt_parts)
@@ -66,9 +66,9 @@ def generate(reply_text: str, replier_id: str = None, lang: str = "en", original
     
     generated_content = res.choices[0].message.content.strip()
     
-    # 最後に必ず❤をつける（モデルの出力が不確実な場合のため）
-    if not generated_content.endswith("❤"):
-        generated_content += "❤"
+    # 最後に必ず❤️をつける（モデルの出力が不確実な場合のため）
+    if not generated_content.endswith("❤️"):
+        generated_content += "❤️"
         
     return generated_content
 

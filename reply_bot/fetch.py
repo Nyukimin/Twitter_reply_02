@@ -16,10 +16,10 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString, Tag
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-from .config import TARGET_USER, MAX_SCROLLS
+from .config import TARGET_USER, MAX_SCROLLS, LOGIN_TIMEOUT_ENABLED, LOGIN_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT_SECONDS
 from .get_cookie import load_cookies_and_navigate # load_cookies_and_navigate をインポート
 from . import db  # データベースモジュールをインポート
 
@@ -28,6 +28,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # JSTタイムゾーンを定義
 jst = pytz.timezone('Asia/Tokyo')
+
+def extract_text_with_emoji(element) -> str:
+    """
+    BeautifulSoup要素からテキストとimgタグのalt属性（絵文字）を含めて抽出する
+    """
+    if element is None:
+        return ""
+    result = ""
+    for child in element.children:
+        if isinstance(child, NavigableString):
+            result += str(child)
+        elif isinstance(child, Tag):
+            if child.name == "img" and child.has_attr("alt"):
+                result += child["alt"]
+            else:
+                result += extract_text_with_emoji(child)
+    return result
 
 def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
     """
@@ -48,7 +65,7 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
 
         # リプライ本文の抽出
         content_element = tweet_article.find('div', {'data-testid': 'tweetText'})
-        content = content_element.get_text(separator='\n') if content_element else ""
+        content = extract_text_with_emoji(content_element) if content_element else ""
 
         # リプライしたユーザーIDと表示名の抽出
         replier_id = ""
@@ -57,7 +74,7 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         if user_name_div:
             display_name_span = user_name_div.find('span', class_=lambda x: x and 'r-dnmrzs' in x and 'r-1udh08x' in x and 'r-1udbk01' in x and 'r-3s2u2q' in x)
             if display_name_span:
-                display_name = display_name_span.get_text(separator='').strip()
+                display_name = extract_text_with_emoji(display_name_span).strip()
             
             user_link = user_name_div.find('a', {'role': 'link', 'href': lambda href: href and href.startswith('/') and '/status/' not in href})
             if user_link and 'href' in user_link.attrs:
@@ -171,6 +188,14 @@ def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX
         options.add_argument('--log-level=3') # INFOレベル以上のログのみ表示
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
+        
+        # ページ読み込みタイムアウトを設定
+        if LOGIN_TIMEOUT_ENABLED:
+            driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
+            logging.info(f"ページ読み込みタイムアウト設定: {PAGE_LOAD_TIMEOUT_SECONDS}秒")
+        else:
+            logging.info("ページ読み込みタイムアウトが無効化されています。")
+        
         logging.info("Selenium WebDriverを起動しました。")
 
         # Cookieを読み込み、ブラウザにセットします
@@ -196,12 +221,19 @@ def fetch_replies(target_user: str, output_csv_path: str, max_scrolls: int = MAX
 
         # ページが完全にロードされるのを待機するために明示的な待機を追加
         try:
-            WebDriverWait(driver, 30).until( # タイムアウトを30秒に延長
-                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
-            )
-            logging.info("通知ページがロードされました。")
+            if LOGIN_TIMEOUT_ENABLED:
+                logging.info(f"ログインタイムアウト設定: {LOGIN_TIMEOUT_SECONDS}秒")
+                WebDriverWait(driver, LOGIN_TIMEOUT_SECONDS).until(
+                    EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+                )
+                logging.info("通知ページがロードされました。")
+            else:
+                logging.info("ログインタイムアウトが無効化されています。ページロードを待機しません。")
         except TimeoutException:
-            logging.warning("通知ページのロード中にタイムアウトしました。Seleniumは続行します。")
+            if LOGIN_TIMEOUT_ENABLED:
+                logging.warning(f"通知ページのロード中にタイムアウトしました（{LOGIN_TIMEOUT_SECONDS}秒）。Seleniumは続行します。")
+            else:
+                logging.info("ログインタイムアウトが無効化されているため、タイムアウトは発生しません。")
 
         # 0ページ目（初回ページ）のデータ取得
         logging.info("0ページ目（初回ページ）のデータ取得を開始します...")

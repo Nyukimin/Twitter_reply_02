@@ -21,7 +21,16 @@ async def main():
     purge_old(hours=24)
     logging.info("データベースの初期化と古いデータの削除が完了しました。")
 
-    replies = fetch_replies(TARGET_USER)
+    # CSVファイル名の生成（実行開始時）
+    from datetime import datetime
+    from pathlib import Path
+    
+    output_dir = Path('output')
+    output_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_csv_path = output_dir / f'extracted_tweets_{timestamp}.csv'
+    
+    replies = fetch_replies(TARGET_USER, str(output_csv_path))
     logging.info(f"新たに {len(replies)} 件のリプライを取得しました。")
 
     for r in replies:
@@ -29,12 +38,13 @@ async def main():
         if not is_replied(rid):
             logging.info(f"未返信リプライを検出しました: {rid}")
             try:
-                reply_text = generate(r["content"], r["replier_id"], r["lang"], r.get("original_tweet_content"))
+                # fetch.pyの戻り値の構造に合わせて修正
+                reply_text = generate(r["contents"], r["UserID"], "ja", None)  # 言語は日本語固定
                 logging.info(f"応答文を生成しました。内容: {reply_text[:50]}...")
 
                 # Playwrightでの投稿は非同期処理のためawait
-                await post_reply(r["tweet_id"], rid, reply_text)
-                mark_replied(rid)
+                await post_reply(r["reply_id"], rid, reply_text)  # tweet_idをreply_idに変更
+                mark_replied(rid, r["UserID"], reply_text, r.get("is_my_thread", False))
                 logging.info(f"リプライ {rid} を投稿し、返信済みとしてマークしました。")
                 
                 # 複数回投稿の間に10秒の間隔を空ける
