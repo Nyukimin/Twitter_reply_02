@@ -8,7 +8,7 @@ DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
 GEMINI_API_KEY= "AIzaSyA7aSuSGwd2weVFYXbnbA1fIznLdbHqlbE" # Geminiを使用する場合
 
 # スクロール設定
-MAX_SCROLLS   = 500  # 最大スクロール回数（デフォルト: 100）
+MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
 SCROLL_PIXELS = 3000  # 1回のスクロール量（ピクセル数）
 
 # タイムアウト設定

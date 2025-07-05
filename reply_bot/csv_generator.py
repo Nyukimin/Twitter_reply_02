@@ -147,7 +147,7 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
         return None
 
-def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pixels: int = SCROLL_PIXELS) -> str | None:
+def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pixels: int = SCROLL_PIXELS, hours_to_collect: int | None = None) -> str | None:
     """
     Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得し、CSVリストを生成します。
     Twitterの通知ページからリプライ一覧を抽出し、スクロールしながらHTMLを保存し、
@@ -157,6 +157,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
         output_csv_path: 出力CSVファイルパス
         max_scrolls: 最大スクロール回数
         scroll_pixels: 1回のスクロール量（ピクセル数）
+        hours_to_collect: 何時間前までのリプライを収集するか。Noneの場合は制限なし。
     
     Returns:
         str | None: 生成されたCSVファイルのパス。失敗した場合はNone。
@@ -170,6 +171,14 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
     processed_reply_ids = set()
     csv_header_written = False
 
+    # 時間の閾値設定
+    time_threshold = None
+    if hours_to_collect is not None:
+        jst = pytz.timezone('Asia/Tokyo')
+        now = datetime.now(jst)
+        time_threshold = now - timedelta(hours=hours_to_collect)
+        logging.info(f"{hours_to_collect}時間前までのリプライを収集します。閾値: {time_threshold.strftime('%Y-%m-%d %H:%M:%S')}")
+
     # CSVファイルが既に存在する場合はヘッダーを書き込まない (追記モード)
     if os.path.exists(output_csv_path):
         with open(output_csv_path, 'r', encoding='utf-8') as f:
@@ -178,6 +187,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
                 csv_header_written = True
 
     driver = None
+    stop_processing = False # 処理停止フラグ
     try:
         driver = setup_driver(headless=False) # 動作確認のためヘッドフルで実行
         if not driver:
@@ -187,6 +197,17 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
         # 通知ページにアクセス
         logging.info("通知ページにアクセス中: https://x.com/notifications/mentions")
         driver.get("https://x.com/notifications/mentions")
+
+        # ユーザーの指示による追加のナビゲーションシーケンス
+        logging.info("最新情報を取得するためにページをリフレッシュします。")
+        time.sleep(3)
+        driver.get("https://x.com/home")
+        logging.info("ホームページに移動しました。")
+        time.sleep(1)
+        driver.get("https://x.com/notifications/mentions")
+        logging.info("再度、通知ページに移動しました。")
+        time.sleep(3) # ページの読み込みを待機
+        logging.info("リフレッシュが完了しました。処理を開始します。")
 
         # ページが完全にロードされるのを待機するために明示的な待機を追加
         try:
@@ -224,6 +245,14 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
         for tweet_article in initial_tweets:
             extracted_info = _extract_tweet_info(tweet_article)
             if extracted_info:
+                # 時間チェック
+                if time_threshold:
+                    tweet_time = datetime.fromisoformat(extracted_info["date_time"])
+                    if tweet_time < time_threshold:
+                        logging.info(f"閾値より古いリプライが見つかりました ({tweet_time.strftime('%Y-%m-%d %H:%M:%S')})。処理を停止します。")
+                        stop_processing = True
+                        break
+
                 reply_id = extracted_info.get("reply_id")
                 if reply_id and reply_id not in processed_reply_ids:
                     replies_data.append(extracted_info)
@@ -244,7 +273,7 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
 
         # ページを下にスクロールしてすべてのツイートをロード
         scroll_count = 0
-        while scroll_count < max_scrolls:
+        while not stop_processing and scroll_count < max_scrolls:
             scroll_count += 1
             logging.info(f"スクロール {scroll_count}/{max_scrolls} 回目...")
             current_html_source = driver.page_source
@@ -263,6 +292,14 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
             for tweet_article in tweets:
                 extracted_info = _extract_tweet_info(tweet_article)
                 if extracted_info:
+                    # 時間チェック
+                    if time_threshold:
+                        tweet_time = datetime.fromisoformat(extracted_info["date_time"])
+                        if tweet_time < time_threshold:
+                            logging.info(f"閾値より古いリプライが見つかりました ({tweet_time.strftime('%Y-%m-%d %H:%M:%S')})。処理を停止します。")
+                            stop_processing = True
+                            break
+                    
                     reply_id = extracted_info.get("reply_id")
                     if reply_id and reply_id not in processed_reply_ids:
                         replies_data.append(extracted_info)
@@ -278,6 +315,10 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
                             writer.writerow(extracted_info)
                     elif reply_id:
                         logging.info(f"重複するリプライIDをスキップしました: {reply_id}")
+            
+            if stop_processing:
+                logging.info("指定期間外のリプライに到達したため、スクロールを停止します。")
+                break
             
             last_height = driver.execute_script("return document.body.scrollHeight")
             
@@ -309,18 +350,9 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
 
     # 最終的なCSV書き込み
     if replies_data:
-        try:
-            with open(output_csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=replies_data[0].keys())
-                if not csv_header_written:
-                    writer.writeheader()
-                writer.writerows(replies_data)
-            logging.info(f"合計 {len(replies_data)} 件のリプライを {output_csv_path} に保存しました。")
-            logging.info(f"最終的に {len(processed_reply_ids)} 件のユニークなリプライが処理されました。")
-            return output_csv_path
-        except Exception as e:
-            logging.error(f"CSVファイルへの書き込み中にエラーが発生しました: {e}")
-            return None
+        logging.info(f"合計 {len(replies_data)} 件の新しいリプライを {output_csv_path} に保存しました。")
+        logging.info(f"最終的に {len(processed_reply_ids)} 件のユニークなリプライが処理されました。")
+        return output_csv_path
     else:
         logging.info("新しいリプライは見つかりませんでした。")
         # 新しいリプライがなくても、ファイル自体は存在している可能性があるのでパスを返す
@@ -345,6 +377,12 @@ if __name__ == "__main__":
         default=SCROLL_PIXELS,
         help=f"1回のスクロール量（ピクセル数）(デフォルト: {SCROLL_PIXELS})"
     )
+    parser.add_argument(
+        "--hours",
+        type=int,
+        default=None,
+        help="何時間前までのリプライを収集するか。指定しない場合は制限なし。"
+    )
     args = parser.parse_args()
 
     # 出力パスが指定されていない場合、タイムスタンプ付きのパスを生成
@@ -356,4 +394,4 @@ if __name__ == "__main__":
     else:
         output_path = args.output
 
-    main_process(output_csv_path=output_path, max_scrolls=args.scrolls, scroll_pixels=args.pixels) 
+    main_process(output_csv_path=output_path, max_scrolls=args.scrolls, scroll_pixels=args.pixels, hours_to_collect=args.hours) 

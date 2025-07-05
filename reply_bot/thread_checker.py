@@ -152,6 +152,19 @@ def main_process(input_csv: str, limit: int = None) -> str | None:
     logging.info(f"'{input_csv}' からデータを読み込み、逐次処理を開始します...")
     try:
         df = pd.read_csv(input_csv)
+
+        # 'reply_num' を数値に変換し、存在しない場合は0を代入
+        if 'reply_num' in df.columns:
+            df['reply_num'] = pd.to_numeric(df['reply_num'], errors='coerce').fillna(0).astype(int)
+        else:
+            df['reply_num'] = 0
+            logging.warning("'reply_num'列が見つからなかったため、0として扱います。")
+
+        # ユーザーの指示に従い、reply_numが0の行のみを処理
+        original_count = len(df)
+        df = df[df['reply_num'] == 0].copy()
+        logging.info(f"reply_numが0のリプライのみを処理します。{original_count}件から{len(df)}件にフィルタリングしました。")
+        
         if limit:
             df = df.head(limit)
             logging.info(f"処理件数を {limit} 件に制限しました。")

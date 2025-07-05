@@ -139,7 +139,8 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None) -
 
 def main_process(input_csv: str, limit: int = None):
     """
-    CSVファイルを読み込み、返信を生成して新しいCSVファイルに一件ずつ保存します。
+    CSVファイルを読み込み、返信を生成して新しいCSVファイルに保存します。
+    is_my_threadがFalseの場合は、返信を生成せずにそのままコピーします。
     """
     logging.info(f"入力ファイル: {input_csv}")
     
@@ -149,48 +150,45 @@ def main_process(input_csv: str, limit: int = None):
         logging.error(f"ファイルが見つかりません: {input_csv}")
         return None
 
-    # is_my_threadがTrueの行に絞り込む
-    my_thread_replies = df[df['is_my_thread'] == True].copy()
-    
-    if my_thread_replies.empty:
-        logging.info("自分のスレッドへの返信が見つかりませんでした。処理を終了します。")
-        return None
+    # is_my_thread がブール値でない可能性を考慮して変換
+    if 'is_my_thread' in df.columns:
+        df['is_my_thread'] = df['is_my_thread'].apply(lambda x: str(x).lower() == 'true')
+    else:
+        df['is_my_thread'] = False
+        logging.warning("'is_my_thread' 列が見つからなかったため、すべて他人のスレッドへのリプライとして扱います。")
 
     # ユーザーの指示で件数を制限
+    df_to_process = df.head(limit).copy() if limit is not None else df.copy()
     if limit is not None:
         logging.info(f"処理件数を {limit} 件に制限します。")
-        my_thread_replies = my_thread_replies.head(limit)
 
-    logging.info(f"自分のスレッドへの返信 {len(my_thread_replies)} 件に対して返信を生成します。")
+    logging.info(f"合計 {len(df_to_process)} 件のデータに対して処理を開始します。")
 
+    # is_my_thread に基づいて返信を生成
+    generated_replies = []
+    for index, row in df_to_process.iterrows():
+        if row['is_my_thread']:
+            logging.info(f"返信を生成中... (対象UserID: {row['UserID']}, is_my_thread: True)")
+            generated_replies.append(generate_reply_for_row(row))
+        else:
+            logging.info(f"返信生成をスキップします (対象UserID: {row['UserID']}, is_my_thread: False)")
+            generated_replies.append("") # 返信を生成しない場合は空文字列
+
+    # 生成した返信を新しい列として追加
+    df_to_process['generated_reply'] = generated_replies
+    
     # 出力ファイルパスの生成
     base_name = os.path.basename(input_csv)
-    # priority_replies_rechecked_ を generated_replies_ に置換
     name_part = base_name.replace('priority_replies_rechecked_', '')
     output_filename = f"generated_replies_{name_part}"
     output_path = os.path.join("output", output_filename)
     
     # ディレクトリが存在しない場合は作成
     os.makedirs("output", exist_ok=True)
-    
-    # 出力ファイルの準備 (ヘッダー書き込み)
-    output_df_columns = list(my_thread_replies.columns) + ['generated_reply']
-    pd.DataFrame(columns=output_df_columns).to_csv(output_path, index=False, encoding='utf-8-sig')
 
-    # 一件ずつ処理して追記
-    for index, row in my_thread_replies.iterrows():
-        logging.info(f"返信を生成中... (対象UserID: {row['UserID']})")
-        
-        generated_reply = generate_reply_for_row(row)
-        
-        # 元の行に生成した返信を追加
-        row_with_reply = row.to_dict()
-        row_with_reply['generated_reply'] = generated_reply
-        
-        # DataFrameに変換してCSVに追記
-        pd.DataFrame([row_with_reply]).to_csv(output_path, mode='a', header=False, index=False, encoding='utf-8-sig')
-        logging.info(f" -> 生成された返信を {output_path} に追記しました。")
-        
+    # 結果をCSVに保存
+    df_to_process.to_csv(output_path, index=False, encoding='utf-8-sig')
+
     logging.info(f"返信生成処理が完了しました。結果は {output_path} に保存されています。")
     return output_path
 
