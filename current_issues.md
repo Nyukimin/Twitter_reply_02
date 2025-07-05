@@ -1,6 +1,10 @@
 # 完了したタスクと今後の課題
 
 ## 完了したタスク
+- `post_reply.py`において、`is_my_thread`が`False`の場合は返信を投稿しないようにロジックを修正しました。
+- `gen_reply.py`において、`is_my_thread`が`False`の場合はAIによる返信を生成しないようにロジックを修正しました。
+- `thread_checker.py`において、`reply_num`が0のリプライのみを処理対象とするフィルタリング機能を追加しました。
+- `csv_generator.py`において、通知ページの再読み込みロジックを実装し、最新のリプライを取得できるように改善しました。
 - `_extract_tweet_info` 関数の `reply_bot/fetch.py` への統合が完了しました。
 - 重複するリプライIDをスキップするロジックが実装されました。
 - 抽出結果を `extracted_tweets.csv` ファイルに追記するロジックが実装されました。

@@ -47,7 +47,8 @@ graph TD;
 -   **入力**: なし
 -   **処理**:
     -   Seleniumを起動し、Cookieを使ってXにログインします。
-    -   通知ページ (`https://x.com/notifications/mentions`) にアクセスし、表示されるメンションから情報を抽出します。
+    -   最新の情報を確実に取得するため、一度ホームページを経由してから再度通知ページ (`https://x.com/notifications/mentions`) にアクセスします。
+    -   表示されるメンションから情報を抽出します。
     -   抽出項目: `reply_id`, `user_id`, `user_name`, `text`, `created_at`, `lang`
 -   **出力**: `output/extracted_tweets_{タイムスタンプ}.csv`
 
@@ -55,7 +56,7 @@ graph TD;
 
 -   **入力**: `extracted_tweets_...csv`
 -   **処理**:
-    -   入力CSVの各リプライについて、スレッドの大元の投稿者が自分自身 (`TARGET_USER`) かを判定します。
+    -   **`reply_num`が0のリプライのみを対象とし**、各リプライについてスレッドの大元の投稿者が自分自身 (`TARGET_USER`) かを判定します。
     -   判定結果を `is_my_thread` (True/False) 列に追加します。
 -   **出力**: `output/priority_replies_rechecked_{タイムスタンプ}.csv`
 
@@ -63,7 +64,8 @@ graph TD;
 
 -   **入力**: `priority_replies_rechecked_...csv`, `replies.db`
 -   **処理**:
-    -   `is_my_thread` が `True` のリプライを対象とします。
+    -   **`is_my_thread` が `True` のリプライに対してのみ**、AIによる返信文を生成します。
+    -   `is_my_thread` が `False` の場合は返信生成をスキップし、`generated_reply` 列を空欄のまま後続の処理に渡します。
     -   リプライ投稿者のUserIDをキーに`user_preferences`テーブルを検索し、ニックネームが存在するか確認します。
     -   **ニックネームがある場合**: プログラムで「{ニックネーム}\n」を先頭につけ、AIには呼びかけを含まない親しみやすい返信を生成させます。
     -   **ニックネームがない場合**: AIに呼びかけなしの短い返信を生成させます。
@@ -81,7 +83,7 @@ graph TD;
         -   **【注意】実際にXへの投稿が行われます。**
         -   CSVの各行について、Seleniumで対象ツイートページにアクセスします。
         -   **`like_num`が0の場合に限り**、ツイートに「いいね」をします。
-        -   `generated_reply` 列のテキストを使って、返信を投稿します（`Ctrl+Enter`キーを使用）。
+        -   その後、**`is_my_thread`が`True`の場合に限り**、`generated_reply` 列のテキストを使って返信を投稿します。
 -   **出力**: なし (ログ出力のみ)
 
 ### 統括制御 (`main.py`)

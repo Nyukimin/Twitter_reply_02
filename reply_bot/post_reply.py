@@ -113,6 +113,7 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
             tweet_id = row['reply_id']
             generated_reply = row['generated_reply']
             like_num = row['like_num']
+            is_my_thread = row.get('is_my_thread', False)
             
             logging.info(f"--- 処理中: {index + 1}/{len(replies_to_post)} (tweet_id: {tweet_id}) ---")
             
@@ -122,8 +123,11 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
             else:
                 logging.info(f"tweet_id: {tweet_id} は既に {like_num} 件の「いいね」があるため、スキップします。")
 
-            # 2. 返信する
-            post_reply_to_tweet(driver, tweet_id, generated_reply, dry_run)
+            # 2. is_my_threadがTrueの場合のみ返信する
+            if is_my_thread:
+                post_reply_to_tweet(driver, tweet_id, generated_reply, dry_run)
+            else:
+                logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信をスキップします。")
             
             time.sleep(5) # 次の処理までのクールダウン
 
