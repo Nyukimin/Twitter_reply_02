@@ -1,4 +1,4 @@
-# Maya自動返信ボット 仕様書 (v2.1)
+# Maya自動返信ボット 仕様書 (v3.0)
 
 ## 1. 目的
 
@@ -70,7 +70,8 @@ graph TD;
     -   **ニックネームがある場合**: プログラムで「{ニックネーム}\n」を先頭につけ、AIには呼びかけを含まない親しみやすい返信を生成させます。
     -   **ニックネームがない場合**: AIに呼びかけなしの短い返信を生成させます。
     -   AIモデルにはGoogleのGemini (`gemini-1.5-flash`) を使用します。
-    -   生成された返信文を `generated_reply` 列に追加します。
+    -   **後処理の適用**: 生成されたテキストに対し、後処理を実行します。許可されていない絵文字やAI自身の名前などの不要語句を削除し、末尾に必ず🩷が1つだけ付くようにルールを強制します。
+    -   最終的な返信文を `generated_reply` 列に追加します。
 -   **出力**: `output/generated_replies_{タイムスタンプ}.csv`
 
 ### ステップ4: 投稿処理 (`post_reply.py`)
@@ -84,6 +85,7 @@ graph TD;
         -   CSVの各行について、Seleniumで対象ツイートページにアクセスします。
         -   **`like_num`が0の場合に限り**、ツイートに「いいね」をします。
         -   その後、**`is_my_thread`が`True`の場合に限り**、`generated_reply` 列のテキストを使って返信を投稿します。
+        -   各投稿後、連続投稿によるアカウントリスクを避けるため**30秒**の待機時間を設けます。
 -   **出力**: なし (ログ出力のみ)
 
 ### 統括制御 (`main.py`)
@@ -102,8 +104,9 @@ graph TD;
 ### 設定ファイル (`config.py`)
 -   `TARGET_USER`: 自分自身のXユーザーID (`@`なし)
 -   `USERNAME`, `PASSWORD`: ログイン情報
+-   `GEMINI_API_KEY`: Google Gemini APIのキー
 -   `MAX_SCROLLS`: `csv_generator`での最大スクロール回数
--   `MAYA_PERSONALITY_PROMPT`: `gen_reply`でAIに与える人格設定プロンプト
+-   `MAYA_PERSONALITY_PROMPT`: **この設定は廃止されました。**プロンプトは現在 `reply_bot/gen_reply.py` スクリプト内で直接管理されています。
 
 ### データベース (`replies.db`)
 -   **`user_preferences`テーブル**: ニックネームや言語など、ユーザーごとの設定を保存します。

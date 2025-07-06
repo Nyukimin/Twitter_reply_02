@@ -9,7 +9,7 @@
 - **AIによる応答文生成**: OpenAIなどのLLM（大規模言語モデル）を利用し、「Maya」というAIアシスタントのパーソナリティで自然な日本語の返信を生成します。`is_my_thread` フラグが `True`（自分のスレッドへの返信）の場合のみAIによる返信を生成し、`False` の場合は返信を生成しません。
 - **自動ログイン・投稿**: `selenium` を使用してXに自動ログインし、生成された応答文を対象のリプライに投稿します。投稿は `is_my_thread` が `True` の場合に限定されます。ただし、「いいね」は `is_my_thread` の状態に関わらず、相手のいいね数が0の場合に行われます。Cookie (`twitter_cookies_01.pkl`) を使用してログイン状態を維持します。
 - **返信済み管理とユーザー設定**: `sqlite3` を用いて、すでに返信済みのリプライIDと、ユーザーごとの呼び名、言語、**およびスレッド起点情報（`is_my_thread`）**などの設定情報を管理します。直近24時間分のリプライデータのみを保持し、データベースの肥大化を防ぎます。
-- **投稿間隔**: 連続して投稿する場合には、X側の検知を避けるため10秒間の間隔を空けます。
+- **投稿間隔**: 連続して投稿する場合には、X側の検知を避けるため30秒間の間隔を空けます。
 - **定期実行**: 1時間に1回、`cron`（または同等のタスクスケジューラ）によって自動実行されるように設計されています。
 
 ## 技術スタック
@@ -23,14 +23,15 @@
 ```
 Twitter_reply/
 ├── reply_bot/
-│   ├─ config.py          # 各種設定（アカウント情報、APIキーなど）
-│   ├─ db.py              # SQLite 操作（初期化／チェック／登録／古いデータ削除、ユーザー設定のCRUD）
-│   ├─ fetch.py           # Selenium を使ったツイート・リプライ取得ロジック（スレッド判定含む）
-│   ├─ gen_reply.py       # 応答文を生成 (`is_my_thread`がTrueの場合のみ)
-│   ├─ post_reply.py      # 返信投稿 (`is_my_thread`がTrueの場合のみ) と「いいね」を実行
-│   ├─ get_cookie.py      # Selenium を使ったCookieの保存と読み込み
 │   ├─ main.py            # 全体制御スクリプト
+│   ├─ csv_generator.py   # Selenium を使ったリプライ収集ロジック
+│   ├─ thread_checker.py  # スレッドの起点投稿が自分自身か判定するロジック
+│   ├─ gen_reply.py       # AIによる応答文生成とルール適用 (`is_my_thread`がTrueの場合のみ)
+│   ├─ post_reply.py      # 返信投稿 (`is_my_thread`がTrueの場合のみ) と「いいね」を実行
 │   ├─ add_user_preferences.py # ユーザーの呼び名などをDBに一括登録するスクリプト
+│   ├─ config.py          # 各種設定（アカウント情報、APIキーなど）
+│   ├─ db.py              # SQLite データベース操作
+│   ├─ get_cookie.py      # Selenium を使ったCookieの保存と読み込み
 │   └─ requirements.txt   # pip install 用依存リスト
 ├── cookie/
 │   └── twitter_cookies_01.pkl
@@ -67,7 +68,7 @@ pip install webdriver-manager
 ```
 
 ### 4. `config.py` の設定
-`reply_bot/config.py` を作成し、Xのアカウント情報やOpenAI APIキーなどを設定します。
+`reply_bot/config.py` を作成し、Xのアカウント情報やGemini APIキーなどを設定します。
 このファイルはGit管理から除外することを推奨します（`.gitignore` に追加してください）。
 
 ```python
@@ -76,13 +77,11 @@ TARGET_USER   = "nyukimi_AI"  # あなたのXユーザー名（@は不要）
 LOGIN_URL     = "https://x.com/login"
 USERNAME      = "nyukimi_AI" # Xのログインに使用するユーザー名またはメールアドレス
 PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
-OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
+GEMINI_API_KEY= "your-gemini-api-key" # Gemini APIキー
 DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
-# GEMINI_API_KEY= "your-gemini-api-key" # Geminiを使用する場合
 
-# Mayaのパーソナリティ設定（gen_reply.pyで利用）
-MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）での「Maya（32歳の癒し系女性アカウント）」として、リプライに対する自然な返信を生成してください,\n\n【Mayaの返信スタイル】\n- 基本文体：語尾に絵文字（❤️🩷）をつけたやさしい口調。敬語とタメ口を柔らかく混ぜる,\n- 呼びかけ：相手の名前を省略せず、「〇〇ちゃん」「〇〇さん」「〇〇くん」で呼ぶ,\n- 感情表現：「えへへ」「うふふ」「やーだー」「うんうん」「ふふっ」などの"照れ"や"癒し"の擬音語を適度に挿入,\n- 絵文字は❤️🩷を主軸に、1〜2個を文末に添える,\n- 一言返しでなく、相手の発言を少しなぞりながら優しく返す,\n- 日本語・英語・スペイン語の混在も可（例：Gracias🩷、thanks❤️）\n\n【出力形式】\n@相手のアカウント名 〇〇ちゃん（またはさん・くん）＋自然な返答（15〜35文字前後）, 絵文字は文末に配置し、言葉の途中に入れないこと,\n
-【制約】\n- 上から目線は禁止,\n- 説教調・堅い言い回しは使用禁止,\n- あくまで親しみ、やさしさ、照れ、癒しが伝わることを最優先とする,\n"""
+# 注意: Mayaのパーソナリティや返信ルールに関するプロンプトは、
+# 安全性と管理のしやすさから `reply_bot/gen_reply.py` スクリプト内で直接定義されています。
 
 THANK_YOU_PHRASES = {
     "en": "thanks❤",
