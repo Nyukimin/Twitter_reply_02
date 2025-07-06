@@ -105,8 +105,8 @@ def main_process(input_csv: str, dry_run: bool = True, limit: int | None = None)
             else:
                 logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信をスキップします。")
             
-            logging.info("次の処理までのクールダウン (5秒)")
-            time.sleep(5)
+            logging.info("次の処理までのクールダウン (30秒)")
+            time.sleep(30)
 
     finally:
         logging.info("全ての処理が完了しました。WebDriverを終了します。")
