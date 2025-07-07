@@ -14,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup, NavigableString, Tag
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium import webdriver
 
 from .config import TARGET_USER, MAX_SCROLLS, LOGIN_TIMEOUT_ENABLED, LOGIN_TIMEOUT_SECONDS, PAGE_LOAD_TIMEOUT_SECONDS, SCROLL_PIXELS
 from .utils import setup_driver # 共通のWebDriverセットアップをインポート
@@ -126,34 +127,46 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
             if match:
                 like_num = int(match.group(1))
 
+        # 返信数が0より大きいツイートはスキップ
+        if reply_num > 0:
+            logging.info(f"返信数が0より大きいためスキップします: reply_id={reply_id}, reply_num={reply_num}")
+            return None
+
         # 言語コードの抽出
         lang = 'und' # デフォルトは 'und'
         if content_element and content_element.has_attr('lang'):
             lang = content_element['lang']
 
+        # 全ての文字列フィールドがNoneでないことを保証する
+        final_replier_id = replier_id if replier_id is not None else ""
+        final_display_name = display_name if display_name is not None else ""
+        final_reply_to_user = reply_to_user if reply_to_user is not None else ""
+        final_content = content if content is not None else ""
+
         return {
-            "UserID": replier_id,
-            "Name": display_name,
+            "UserID": final_replier_id,
+            "Name": final_display_name,
             "date_time": tweet_datetime_jst.isoformat(), # JSTに変換してISOフォーマットで文字列として保存
             "reply_id": reply_id,
-            "reply_to": reply_to_user,
-            "contents": content,
+            "reply_to": final_reply_to_user,
+            "contents": final_content,
             "reply_num": reply_num,
             "like_num": like_num,
-            "is_my_thread": is_my_thread,  # スレッド起点判定フラグを追加
+            "is_my_thread": is_my_thread,
             "lang": lang
         }
     except Exception as e:
         logging.error(f"ツイート情報の抽出中にエラーが発生しました: {e}")
         return None
 
-def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pixels: int = SCROLL_PIXELS, hours_to_collect: int | None = None) -> str | None:
+def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pixels: int = SCROLL_PIXELS, hours_to_collect: int | None = None) -> str | None:
     """
     Seleniumを使用して、指定ユーザーのツイートに対するリプライを取得し、CSVリストを生成します。
     Twitterの通知ページからリプライ一覧を抽出し、スクロールしながらHTMLを保存し、
     重複をスキップしてリプライ情報をCSVにエクスポートします。
     
     Args:
+        driver: SeleniumのWebDriverインスタンス
         output_csv_path: 出力CSVファイルパス
         max_scrolls: 最大スクロール回数
         scroll_pixels: 1回のスクロール量（ピクセル数）
@@ -186,44 +199,52 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
             if next(reader, None): # ヘッダー行を読み飛ばす
                 csv_header_written = True
 
-    driver = None
     stop_processing = False # 処理停止フラグ
     try:
-        driver = setup_driver(headless=False) # 動作確認のためヘッドフルで実行
         if not driver:
-            logging.error("WebDriverのセットアップに失敗しました。")
+            logging.error("有効なWebDriverインスタンスが渡されませんでした。")
             return None
 
-        # 通知ページにアクセス
-        logging.info("通知ページにアクセス中: https://x.com/notifications/mentions")
-        driver.get("https://x.com/notifications/mentions")
-
-        # ユーザーの指示による追加のナビゲーションシーケンス
-        logging.info("最新情報を取得するためにページをリフレッシュします。")
-        time.sleep(3)
-        driver.get("https://x.com/home")
-        logging.info("ホームページに移動しました。")
-        time.sleep(1)
-        driver.get("https://x.com/notifications/mentions")
-        logging.info("再度、通知ページに移動しました。")
-        time.sleep(3) # ページの読み込みを待機
-        logging.info("リフレッシュが完了しました。処理を開始します。")
-
-        # ページが完全にロードされるのを待機するために明示的な待機を追加
+        # ユーザーの指示に基づき、強制的に最新情報を取得するナビゲーションシーケンス
+        logging.info("--- 最新情報を確実に取得するため、特別なナビゲーションを開始します ---")
         try:
-            if LOGIN_TIMEOUT_ENABLED:
-                logging.info(f"ログインタイムアウト設定: {LOGIN_TIMEOUT_SECONDS}秒")
-                WebDriverWait(driver, LOGIN_TIMEOUT_SECONDS).until(
-                    EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
-                )
-                logging.info("通知ページがロードされました。")
-            else:
-                logging.info("ログインタイムアウトが無効化されています。ページロードを待機しません。")
+            # 1. home
+            logging.info("[1/4] ホームページにアクセスします...")
+            driver.get("https://x.com/home")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("ホームページの読み込み完了。")
+
+            # 2. notifications/mentions
+            logging.info("[2/4] 通知（メンション）ページにアクセスします...")
+            driver.get("https://x.com/notifications/mentions")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("通知ページの読み込み完了。")
+
+            # 3. home (again)
+            logging.info("[3/4] 再度ホームページにアクセスします...")
+            driver.get("https://x.com/home")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("再度ホームページの読み込み完了。")
+
+            # 4. notifications/mentions (final)
+            logging.info("[4/4] 最終的に通知（メンション）ページにアクセスします...")
+            driver.get("https://x.com/notifications/mentions")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("最終的な通知ページの読み込み完了。")
+            
         except TimeoutException:
-            if LOGIN_TIMEOUT_ENABLED:
-                logging.warning(f"通知ページのロード中にタイムアウトしました（{LOGIN_TIMEOUT_SECONDS}秒）。Seleniumは続行します。")
-            else:
-                logging.info("ログインタイムアウトが無効化されているため、タイムアウトは発生しません。")
+            logging.error(f"ナビゲーションシーケンス中にタイムアウトが発生しました（{PAGE_LOAD_TIMEOUT_SECONDS}秒）。処理を中断します。")
+            return None
+        
+        logging.info("--- ナビゲーション完了。リプライの取得を開始します ---")
 
         # 0ページ目（初回ページ）のデータ取得
         logging.info("0ページ目（初回ページ）のデータ取得を開始します...")
@@ -343,10 +364,6 @@ def main_process(output_csv_path: str, max_scrolls: int = MAX_SCROLLS, scroll_pi
     except Exception as e:
         logging.error(f"リプライ取得処理中に予期せぬエラーが発生しました: {e}", exc_info=True)
         return None
-    finally:
-        if driver:
-            driver.quit()
-            logging.info("Selenium WebDriverを終了しました。")
 
     # 最終的なCSV書き込み
     if replies_data:
@@ -393,5 +410,23 @@ if __name__ == "__main__":
         output_path = os.path.join(output_dir, output_file)
     else:
         output_path = args.output
-
-    main_process(output_csv_path=output_path, max_scrolls=args.scrolls, scroll_pixels=args.pixels, hours_to_collect=args.hours) 
+    
+    # このファイルが直接実行された場合のみ、driverをセットアップして終了する
+    driver = None
+    try:
+        # 引数でheadlessモードを制御できるようにする (例: --headless)
+        # ここでは簡単のため、configに合わせるか、固定値とします。
+        # ユーザーの記憶に基づき、デバッグ中はFalseを維持 [[memory:2213753]]
+        driver = setup_driver(headless=False) 
+        if driver:
+            main_process(
+                driver=driver,
+                output_csv_path=output_path, 
+                max_scrolls=args.scrolls, 
+                scroll_pixels=args.pixels, 
+                hours_to_collect=args.hours
+            )
+    finally:
+        if driver:
+            driver.quit()
+            logging.info("Selenium WebDriverを終了しました。") 

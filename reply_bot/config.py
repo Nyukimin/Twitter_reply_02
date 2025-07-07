@@ -4,17 +4,23 @@ LOGIN_URL     = "https://x.com/login"
 USERNAME      = "Maya19960330" # Xのログインに使用するユーザー名またはメールアドレス
 PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
 # OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
-DB_PATH       = "replies.db"    # SQLiteデータベースのファイル名
+DB_FILE       = "replies.db"    # SQLiteデータベースのファイル名
 GEMINI_API_KEY= "AIzaSyA7aSuSGwd2weVFYXbnbA1fIznLdbHqlbE" # Geminiを使用する場合
 
 # スクロール設定
 MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
 SCROLL_PIXELS = 3000  # 1回のスクロール量（ピクセル数）
 
+# データ収集期間の設定
+HOURS_TO_COLLECT = 72 # 何時間前までのリプライを収集するか (Noneの場合は無制限)
+
 # タイムアウト設定
 LOGIN_TIMEOUT_ENABLED = False   # ログインタイムアウトを有効にするかどうか（True/False）
 LOGIN_TIMEOUT_SECONDS = 60     # ログインタイムアウト時間（秒）（デフォルト: 60秒）
 PAGE_LOAD_TIMEOUT_SECONDS = 30 # ページ読み込みタイムアウト時間（秒）（デフォルト: 30秒）
+
+# 投稿インターバル設定
+POST_INTERVAL_SECONDS = 15     # 投稿間の待機時間（秒）
 
 # 返信優先度設定
 PRIORITY_REPLY_ENABLED = False  # 優先度付けを有効にするか (True/False)
@@ -36,7 +42,7 @@ MAYA_PERSONALITY_PROMPT = """以下のルールに従い、X（旧Twitter）で�
 - 感情表現：「えへへ」「うふふ」「やーだー」「うんうん」「ふふっ」などの"照れ"や"癒し"の擬音語を適度に挿入,
 - 内容タイプ：
   1. 感謝系：「ありがとう❤️」「ありがとうございます🩷」「thanks🩷」「Gracias🩷」などを多用,
-  2. あいさつ：「おはよう❤️」「こんにちは��」「今日もよろしくね❤️」など自然な朝昼挨拶,
+  2. あいさつ：「おはよう❤️」「こんにちは」「今日もよろしくね❤️」など自然な朝昼挨拶,
   3. 甘え系・照れ系：「すきだよ❤️」「照れちゃう🩷」「うふふ…」など含みを持たせる,
   4. 共感・ねぎらい：「大変だったね…」「無理しないでね」「一緒にがんばろ🩷」などの優しいコメント,
 - 絵文字は❤️🩷を主軸に、1〜2個を文末に添える,

@@ -105,13 +105,14 @@ def clean_generated_text(text: str) -> str:
 
     return cleaned_text
 
-def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None) -> str:
+def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, generated_replies_history: list[str] = None) -> str:
     """
     DataFrameの行データに基づいて、AIが生成した応答文を返します。
     
     Args:
         row (pd.Series): 返信を生成する対象のリプライデータを含む行。
         original_tweet_content (str): Mayaの元のツイート内容（オプション）。
+        generated_replies_history (list[str]): これまでに生成された返信のリスト。
 
     Returns:
         str: 生成された応答文。
@@ -170,12 +171,25 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None) -
     # AIへの指示を明確化
     prompt_parts.extend([
         "【返信文の作成ルール】",
-        "1. 上記のリプライ内容に対して、あなたの「返信の本文」だけを、一言またはごく短い1文で生成してください。",
+        "1. 上記のリプライ内容に対して、あなたの「返信の本文」だけを、自然で心のこもった短い文章で生成してください。**原則として1文で、長くても2文まで**です。",
         "2. **重要：相手の名前（〇〇さん）や、あなた自身の名前（Maya）、挨拶（こんにちは、など）は絶対に入れないでください。** これらはプログラムが自動で対応するため、あなたの役割は返信の「本文」作成のみです。",
         "3. 返信の語尾には、❤️か🩷のどちらか一つを必ず付けてください。文中や語尾に他の絵文字は一切入れないでください。",
-        "4. 相手のリプライに性的なニュアンスが含まれている場合、困惑したり、恥ずかしがるような反応をしてください。決して喜んだり同意したりしないでください。",
-        "   （適切な返答の例：「えっ、な、何言ってるの…？❤️」「もう、冗談ばっかり…🩷」「そういうのは恥ずかしいよぉ…🩷」「心臓に悪いってば…！❤️」「そんなこと言われたら、どうしたらいいか分かんないよぉ…🩷」）"
+        "4. **超重要：相手のリプライが「うん」「えへへ」「❤️」のような、一言や絵文字のみの【超短文】である場合、あなたの返信も【超短文】でなければなりません。** これは絶対的なルールです。具体的には、「うふふ」「なになに？」「もう！」「やだー！」のような、ごく短い相槌や、相手の言葉を少し変えて返すだけにしてください。長い文章で返信することは**固く禁止**します。",
+        "5. 相手のリプライに性的なニュアンスが含まれている場合、困惑したり、恥ずかしがるような反応をしてください。決して喜んだり同意したりしないでください。",
+        "   （適切な返答の例：「えっ、何言ってるの…？❤️」「もう、冗談ばっかり…🩷」「そういうのは恥ずかしいよ…🩷」「心臓に悪いってば…！❤️」「そんなこと言われたら、どうしたらいいか分かんないよ…🩷」）"
     ])
+
+    # --- 単語の重複を避けるための指示を追加 ---
+    if generated_replies_history:
+        history_str = "、".join(generated_replies_history)
+        avoidance_prompt = (
+            "6. **【最重要創造性ルール】単調な返信はあなたの評価を著しく損ないます。絶対に避けてください。**\n"
+            "   - **禁止事項:** これまでの返信で多用した安易な言葉（例：「嬉しい」「ありがとう」「照れる」「ドキドキ」「頑張る」など）を再び使うことは**固く禁止**します。\n"
+            f"   - **過去の類似表現の回避:** 以前の返信（例: 「{history_str}」）と似た言い回しや構成は使わないでください。\n"
+            "   - **具体的な感情表現の義務:** 相手の言葉の**どの部分に**、あなたが**どう感じたのか**を、あなたの言葉で具体的に表現してください。 表面的な相槌ではなく、心の通った対話を意識してください。\n"
+            "   - **常に新しい表現を:** あなたの豊かな感情表現の引き出しを全て使い、毎回新鮮で、相手が「また話したい」と思うような、魅力的な返信を心がけてください。これはあなたの能力を示す最大のチャンスです。"
+        )
+        prompt_parts.append(avoidance_prompt)
 
     prompt = "\n".join(prompt_parts)
     logging.debug(f"生成されたプロンプト:\n{prompt}")
@@ -217,38 +231,79 @@ def main_process(input_csv: str, limit: int = None):
     logging.info(f"入力ファイル: {input_csv}")
     
     try:
+        # アプローチA: 事後クレンジング - まず寛容に読み込む
         df = pd.read_csv(input_csv)
+
+        # --- データクレンジング処理 ---
+        # 文字列であるべき列のNaNを空文字列に置換
+        string_columns = ['UserID', 'Name', 'date_time', 'reply_id', 'reply_to', 'contents', 'lang']
+        for col in string_columns:
+            if col in df.columns:
+                df[col] = df[col].fillna('')
+
+        # 数値であるべき列のNaNを0に置換し、整数型に変換
+        numeric_columns = ['reply_num', 'like_num']
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+        # 真偽値であるべき列を処理
+        if 'is_my_thread' in df.columns:
+            # NaNをFalseとして扱ってから、文字列比較でboolに変換
+            df['is_my_thread'] = df['is_my_thread'].fillna(False).apply(lambda x: str(x).lower() == 'true')
+        else:
+            # 列が存在しない場合は、すべてFalseとして扱う
+            df['is_my_thread'] = False
+            logging.warning("'is_my_thread' 列が見つからなかったため、すべて他人のスレッドへのリプライとして扱います。")
+
     except FileNotFoundError:
         logging.error(f"ファイルが見つかりません: {input_csv}")
         return None
 
-    # is_my_thread がブール値でない可能性を考慮して変換
-    if 'is_my_thread' in df.columns:
-        df['is_my_thread'] = df['is_my_thread'].apply(lambda x: str(x).lower() == 'true')
-    else:
-        df['is_my_thread'] = False
-        logging.warning("'is_my_thread' 列が見つからなかったため、すべて他人のスレッドへのリプライとして扱います。")
-
     # ユーザーの指示で件数を制限
-    df_to_process = df.head(limit).copy() if limit is not None else df.copy()
-    if limit is not None:
-        logging.info(f"処理件数を {limit} 件に制限します。")
+    if limit is not None and limit > 0:
+        df = df.head(limit)
+        logging.info(f"処理件数を {limit} 件に制限しました。")
 
-    logging.info(f"合計 {len(df_to_process)} 件のデータに対して処理を開始します。")
+    # 生成された返信を格納するリスト
+    generated_replies_for_session = []
 
-    # is_my_thread に基づいて返信を生成
-    generated_replies = []
-    for index, row in df_to_process.iterrows():
+    # 'generated_reply'列を初期化（存在しない場合）
+    if 'generated_reply' not in df.columns:
+        df['generated_reply'] = ''
+
+    # 'lang'列を初期化（存在しない場合）
+    if 'lang' not in df.columns:
+        df['lang'] = ''
+
+    logging.info("返信生成処理を開始します。")
+
+    # is_my_threadがTrueの行のみを対象に処理
+    for index, row in df.iterrows():
+        # is_my_threadがTrueの行だけを処理
         if row['is_my_thread']:
-            logging.info(f"返信を生成中... (対象UserID: {row['UserID']}, is_my_thread: True)")
-            generated_replies.append(generate_reply_for_row(row))
-        else:
-            logging.info(f"返信生成をスキップします (対象UserID: {row['UserID']}, is_my_thread: False)")
-            generated_replies.append("") # 返信を生成しない場合は空文字列
+            # 元ツイートの内容を取得（もしあれば）
+            original_tweet_content = row.get('original_tweet_content')
+            
+            # 返信を生成
+            generated_reply = generate_reply_for_row(row, original_tweet_content, generated_replies_for_session)
+            
+            if generated_reply:
+                df.loc[index, 'generated_reply'] = generated_reply
+                # 履歴に追加するのは、ニックネームを除いた本文のみ
+                reply_body = generated_reply.split('\n')[-1]
+                generated_replies_for_session.append(reply_body)
 
-    # 生成した返信を新しい列として追加
-    df_to_process['generated_reply'] = generated_replies
-    
+            # 言語を検出して 'lang' 列に格納
+            lang = detect_language(row['contents'])
+            df.loc[index, 'lang'] = lang
+        else:
+            # is_my_threadがFalseの場合、generated_replyは空のまま（または既存の値を維持）
+             # しかし、言語は検出しておく
+            lang = detect_language(row['contents'])
+            df.loc[index, 'lang'] = lang
+            logging.info(f"インデックス {index}: is_my_threadがFalseのため、返信生成をスキップします。")
+
     # 出力ファイルパスの生成
     base_name = os.path.basename(input_csv)
     name_part = base_name.replace('priority_replies_rechecked_', '')
@@ -259,7 +314,7 @@ def main_process(input_csv: str, limit: int = None):
     os.makedirs("output", exist_ok=True)
 
     # 結果をCSVに保存
-    df_to_process.to_csv(output_path, index=False, encoding='utf-8-sig', lineterminator='\n')
+    df.to_csv(output_path, index=False, encoding='utf-8-sig', lineterminator='\n')
 
     logging.info(f"返信生成処理が完了しました。結果は {output_path} に保存されています。")
     return output_path
