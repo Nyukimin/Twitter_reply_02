@@ -209,36 +209,52 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
         logging.info("--- 最新情報を確実に取得するため、特別なナビゲーションを開始します ---")
         try:
             # 1. home
-            logging.info("[1/4] ホームページにアクセスします...")
+            logging.info("[1/5] ホームページにアクセスします...")
             driver.get("https://x.com/home")
             WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("ホームページの読み込み完了。")
 
-            # 2. notifications/mentions
-            logging.info("[2/4] 通知（メンション）ページにアクセスします...")
-            driver.get("https://x.com/notifications/mentions")
+            # 2. notifications
+            logging.info("[2/5] 通知ページにアクセスします...")
+            driver.get("https://x.com/notifications")
             WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("通知ページの読み込み完了。")
 
-            # 3. home (again)
-            logging.info("[3/4] 再度ホームページにアクセスします...")
-            driver.get("https://x.com/home")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
-                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
-            )
-            logging.info("再度ホームページの読み込み完了。")
-
-            # 4. notifications/mentions (final)
-            logging.info("[4/4] 最終的に通知（メンション）ページにアクセスします...")
+            # 3. notifications/mentions
+            logging.info("[3/5] 通知（メンション）ページにアクセスします...")
             driver.get("https://x.com/notifications/mentions")
             WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
-            logging.info("最終的な通知ページの読み込み完了。")
+            logging.info("通知（メンション）ページの読み込み完了。")
+            time.sleep(5)  # 完全ロードを待機
+
+            # 4. notifications/mentions (again)
+            logging.info("[4/5] 再度、通知（メンション）ページにアクセスします...")
+            driver.get("https://x.com/notifications/mentions")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            # 4. notifications (again)
+            logging.info("[4/5] 再度、通知ページにアクセスします...")
+            driver.get("https://x.com/notifications")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("再度、通知ページの読み込み完了。")
+
+            # 5. notifications/mentions (final)
+            logging.info("[5/5] 最終的に通知（メンション）ページにアクセスします...")
+            driver.get("https://x.com/notifications/mentions")
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("最終的な通知（メンション）ページの読み込み完了。")
+            time.sleep(5)  # 完全ロードを待機
             
         except TimeoutException:
             logging.error(f"ナビゲーションシーケンス中にタイムアウトが発生しました（{PAGE_LOAD_TIMEOUT_SECONDS}秒）。処理を中断します。")

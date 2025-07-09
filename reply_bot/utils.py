@@ -196,5 +196,5 @@ def get_cookie(driver: webdriver.Chrome):
     except Exception as e:
         logging.error(f"Cookieの保存中にエラーが発生しました: {e}")
         raise e
-
+        
     return None # ループが正常に終了した場合（通常は起こらない） 

@@ -20,6 +20,8 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
     """
     CSVを読み込み、各リプライに対してページアクセスを1回に最適化し、
     「いいね」と「返信」を行います。
+    処理の進捗（いいね）はCSVファイルに追記され、再実行時に完了したタスクをスキップします。
+    返信すべきかどうかは、実行時のスレッドの状態を見て動的に判断します。
     """
     if dry_run:
         logging.info("=== ドライランモードで実行します ===")
@@ -32,38 +34,47 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
         logging.error(f"入力ファイルが見つかりません: {input_csv}")
         return
 
+    # 'liked' 列が存在しない場合はFalseで初期化（'posted'列は動的に判断するため不要）
+    if 'liked' not in df.columns:
+        df['liked'] = False
+    df['liked'] = df['liked'].fillna(False).astype(bool)
+
     # generated_replyが空でない行に絞り込む
-    replies_to_post = df.dropna(subset=['generated_reply']).copy()
+    replies_to_process = df[df['generated_reply'].notna()].copy()
     
-    # limitが指定されている場合は、処理件数を制限する
     if limit is not None and limit > 0:
         logging.info(f"処理件数を {limit} 件に制限します。")
-        replies_to_post = replies_to_post.head(limit)
+        replies_to_process = replies_to_process.head(limit)
         
-    if replies_to_post.empty:
-        logging.info("投稿対象の返信が見つかりませんでした。")
+    if replies_to_process.empty:
+        logging.info("処理対象のツイートが見つかりませんでした。")
         return
         
     if not driver:
         logging.error("有効なWebDriverインスタンスが渡されませんでした。")
         return
 
+    something_changed = False
     try:
-        for index, row in replies_to_post.iterrows():
+        for index, row in replies_to_process.iterrows():
             tweet_id = row['reply_id']
             generated_reply = row['generated_reply']
-            like_num = row['like_num']
             is_my_thread = row.get('is_my_thread', False)
+            is_liked = row['liked']
             
-            logging.info(f"--- 処理中: {index + 1}/{len(replies_to_post)} (tweet_id: {tweet_id}) ---")
+            # 「いいね」済み、かつ返信対象でないツイートは完全にスキップ
+            if is_liked and not is_my_thread:
+                logging.debug(f"tweet_id: {tweet_id} は処理済み（いいね済み、返信対象外）のためスキップします。")
+                continue
+
+            logging.info(f"--- 処理中: {df.index.get_loc(index) + 1}/{len(df)} (tweet_id: {tweet_id}) ---")
             
-            # 1. ページにアクセス (1ツイートにつき1回のみ)
+            # 1. ページにアクセス
             tweet_url = f"https://x.com/any/status/{tweet_id}"
             logging.info(f"ツイートページにアクセス中: {tweet_url}")
             driver.get(tweet_url)
-            wait = WebDriverWait(driver, 20) # 待機時間を20秒に延長
+            wait = WebDriverWait(driver, 20)
 
-            # ★ 新規追加: ツイート本文が表示されるまで待機することで、ページの読み込みを確実にする
             try:
                 logging.info("ツイート本文が表示されるまで待機します...")
                 wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '[data-testid="tweetText"]')))
@@ -71,81 +82,104 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
             except Exception as e:
                 logging.warning(f"ツイート本文の読み込み中にタイムアウトしました。処理を続行しますが、失敗する可能性があります。: {e}")
 
-            # 2. 「いいね」処理
-            if like_num == 0:
+            # 2. 「いいね」処理 (未実施の場合)
+            if not is_liked:
                 try:
-                    # ユーザーの指示により、data-testid="like"方式に戻す
                     like_button_selector = '[data-testid="like"]'
-                    like_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, like_button_selector)))
+                    wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, like_button_selector)))
                     if dry_run:
                         logging.info(f"[DRY RUN] tweet_id: {tweet_id} に「いいね」をします。")
                     else:
                         logging.info(f"tweet_id: {tweet_id} に「いいね」をします。")
+                        like_button = driver.find_element(By.CSS_SELECTOR, like_button_selector)
                         driver.execute_script("arguments[0].click();", like_button)
+                        df.loc[index, 'liked'] = True
+                        something_changed = True
                         time.sleep(1)
-
                 except Exception as e:
-                    logging.error(f"tweet_id: {tweet_id} の「いいね」中にエラーが発生しました: {e}")
+                    # 「いいね」しようとして、すでにされているなどの理由でボタンが見つからないケースは警告に留める
+                    logging.warning(f"tweet_id: {tweet_id} の「いいね」中に問題が発生しました（すでに「いいね」済みの可能性があります）: {e}")
             else:
-                logging.info(f"tweet_id: {tweet_id} は既に {like_num} 件の「いいね」があるため、スキップします。")
+                logging.info(f"tweet_id: {tweet_id} はCSV上で「いいね」済みのためスキップします。")
 
-            # 3. 返信処理
+            # 3. 返信処理 (自分のスレッドの場合のみ動的にチェックして実行)
             if is_my_thread:
+                should_reply = True
+                logging.info("自分のスレッドです。返信の重複チェック（後続ツイートの有無）を行います...")
                 try:
-                    # ★★★ 重複返信チェックを追加 ★★★
-                    logging.info("既存の返信をスキャンして、重複投稿でないか確認します...")
-                    # 自分のユーザーIDを含むリンクを探す
-                    my_reply_xpath = f"//a[contains(@href, '/{TARGET_USER}') and .//span[contains(text(), '@{TARGET_USER}')]]"
+                    # ページ上に存在するすべてのツイート要素を取得
+                    all_tweet_elements = driver.find_elements(By.XPATH, '//article[@data-testid="tweet"]')
                     
-                    try:
-                        # 0.5秒の短い待機で存在チェック（要素があればすぐ見つかるはず）
-                        short_wait = WebDriverWait(driver, 0.5)
-                        short_wait.until(EC.presence_of_element_located((By.XPATH, my_reply_xpath)))
-                        logging.warning(f"★★★ 既に @{TARGET_USER} からの返信が見つかりました。このツイートへの投稿はスキップします。")
-                        # forループの次のイテレーションに移動
-                        continue
-                    except Exception:
-                        # 見つからなかった場合は正常
-                        logging.info("重複投稿は検出されませんでした。返信処理を続行します。")
-
-                    reply_input_selector = '[data-testid="tweetTextarea_0"]'
-                    reply_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, reply_input_selector)))
+                    target_tweet_index = -1
+                    # まず、URLに含まれるIDと一致する「返信対象のツイート」が何番目にあるかを探す
+                    for i, tweet_element in enumerate(all_tweet_elements):
+                        try:
+                            # ツイート内のタイムスタンプなどのリンクにIDが含まれているかチェック
+                            tweet_element.find_element(By.XPATH, f".//a[contains(@href, '/status/{tweet_id}')]")
+                            target_tweet_index = i
+                            logging.info(f"返信対象のツイートを {i + 1}番目に発見しました。")
+                            break
+                        except Exception:
+                            continue
                     
-                    if dry_run:
-                        logging.info(f"[DRY RUN] tweet_id: {tweet_id} に以下の内容で返信します:\n--- MOCK REPLY ---\n{generated_reply}\n--------------------")
+                    if target_tweet_index == -1:
+                        logging.error("ページ内で返信対象のツイートが見つかりませんでした。安全のため返信をスキップします。")
+                        should_reply = False
                     else:
-                        logging.info(f"tweet_id: {tweet_id} に返信します...")
-                        
-                        # クリップボード経由の操作
-                        logging.info("返信ボックスにフォーカスを試みます。")
-                        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, reply_input_selector)))
-                        driver.execute_script("arguments[0].focus(); arguments[0].click();", reply_input)
-                        time.sleep(1) # フォーカス後の待機
-
-                        logging.info("返信内容をクリップボード経由で貼り付けます。")
-                        
-                        final_reply_text = generated_reply.replace('<br>', '\n')
-                        pyperclip.copy(final_reply_text)
-                        
-                        reply_input.send_keys(Keys.CONTROL, 'v')
-                        time.sleep(0.5)
-
-                        logging.info("Ctrl+Enterで返信を投稿します...")
-                        reply_input.send_keys(Keys.CONTROL, Keys.ENTER)
-                        
-                        logging.info("返信を投稿しました。")
-                        # 投稿後の待機はいいねの後に入れるため、ここでは短くする
-                        time.sleep(2) 
+                        # 返信対象のツイートより後にツイート（＝後続の返信）があるか
+                        if len(all_tweet_elements) > target_tweet_index + 1:
+                            num_replies = len(all_tweet_elements) - (target_tweet_index + 1)
+                            logging.warning(f"対象ツイートの後に {num_replies} 件の返信が見つかりました。返信をスキップします。")
+                            should_reply = False
+                        else:
+                            logging.info("対象ツイートの後に返信はありません。返信可能です。")
 
                 except Exception as e:
-                    logging.error(f"tweet_id: {tweet_id} への返信中にエラーが発生しました: {e}")
+                    logging.error(f"返信の重複チェック中に予期せぬエラーが発生しました: {e}", exc_info=True)
+                    should_reply = False # 安全のため、チェックに失敗した場合は投稿しない
+
+                if should_reply:
+                    try:
+                        logging.info("返信処理を開始します。")
+                        reply_input_selector = '[data-testid="tweetTextarea_0"]'
+                        reply_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, reply_input_selector)))
+                        
+                        if dry_run:
+                            logging.info(f"[DRY RUN] tweet_id: {tweet_id} に以下の内容で返信します:\n--- MOCK REPLY ---\n{generated_reply}\n--------------------")
+                        else:
+                            logging.info(f"tweet_id: {tweet_id} に返信します...")
+                            
+                            driver.execute_script("arguments[0].focus(); arguments[0].click();", reply_input)
+                            time.sleep(1)
+
+                            final_reply_text = generated_reply.replace('<br>', '\n')
+                            pyperclip.copy(final_reply_text)
+                            
+                            reply_input.send_keys(Keys.CONTROL, 'v')
+                            time.sleep(0.5)
+
+                            reply_input.send_keys(Keys.CONTROL, Keys.ENTER)
+                            logging.info("返信を投稿しました。")
+                            time.sleep(2)
+                    except Exception as e:
+                        logging.error(f"tweet_id: {tweet_id} への返信中にエラーが発生しました: {e}")
+                else:
+                    logging.info("重複チェックにより返信がスキップされたため、クールダウンを省略して次の処理へ進みます。")
+                    continue
             else:
-                logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信をスキップします。")
+                logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信対象外です。")
 
             logging.info(f"次の処理までのクールダウン ({interval}秒)")
             time.sleep(interval)
     except Exception as e:
         logging.error(f"投稿処理中に予期せぬエラーが発生しました: {e}", exc_info=True)
+    finally:
+        if something_changed and not dry_run:
+            logging.info(f"「いいね」のステータスをCSVファイルに書き込みます: {input_csv}")
+            df.to_csv(input_csv, index=False, encoding='utf-8-sig')
+        else:
+            logging.info("ドライランモードまたは「いいね」の変更がなかったため、CSVは更新されませんでした。")
+            
     logging.info("投稿処理のサイクルが完了しました。")
 
 

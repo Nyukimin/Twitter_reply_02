@@ -7,7 +7,7 @@ import logging
 import emoji
 import re
 from langdetect import detect, LangDetectException
-from .config import GEMINI_API_KEY, MAYA_PERSONALITY_PROMPT, THANK_YOU_PHRASES
+from .config import GEMINI_API_KEY, MAYA_PERSONALITY_PROMPT, THANK_YOU_PHRASES, REPLY_RULES_PROMPT
 from .db import get_user_preference
 from . import utils, db
 
@@ -46,28 +46,29 @@ def detect_language(text: str) -> str:
         # logging.warning(f"言語の検出に失敗しました: {text}")
         return "und"  # Undetermined
 
-def format_reply(text: str) -> str:
+def format_reply(text: str, lang: str = 'ja') -> str:
     """
     AIが生成したテキストや固定フレーズを整形し、最終的な返信文字列を作成する。
-    - 不要な空白を改行に変換する
+    - 不要な空白を改行に変換する (日本語のみ)
     - 絵文字を付与する
     - 前後の空白を除去する
     """
     # 1. 前後の空白を除去
     processed_text = text.strip()
 
-    # 2. 句読点の後のスペースを改行に置換
-    processed_text = processed_text.replace('。 ', '。\n').replace('。　', '。\n')
-    processed_text = processed_text.replace('！ ', '！\n').replace('！　', '！\n')
-    processed_text = processed_text.replace('？ ', '？\n').replace('？　', '？\n')
-    processed_text = processed_text.replace('… ', '…\n').replace('…　', '…\n')
+    # 日本語の場合のみ、スペースを改行に変換する
+    if lang == 'ja':
+        # 2. 句読点の後のスペースを改行に置換
+        processed_text = processed_text.replace('。 ', '。\n').replace('。　', '。\n')
+        processed_text = processed_text.replace('！ ', '！\n').replace('！　', '！\n')
+        processed_text = processed_text.replace('？ ', '？\n').replace('？　', '？\n')
+        processed_text = processed_text.replace('… ', '…\n').replace('…　', '…\n')
 
-    # 3. 全角・半角スペースも改行に変換する
-    processed_text = processed_text.replace('　', '\n')
-    processed_text = processed_text.replace(' ', '\n')
+        # 3. 全角スペースを改行に変換する
+        processed_text = processed_text.replace('　', '\n')
 
-    # 4. 複数の改行を1つにまとめる
-    processed_text = re.sub(r'\n+', '\n', processed_text)
+        # 4. 複数の改行を1つにまとめる
+        processed_text = re.sub(r'\n+', '\n', processed_text)
 
     # 5. 全体の末尾の空白・改行をきれいにする
     final_reply = processed_text.strip()
@@ -121,27 +122,45 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, g
     replier_id = row['UserID']
     lang = row.get('lang', 'und') # lang列が存在しない場合に備える
 
-    # AIに渡す前に、リプライ本文からメンション（@ユーザー名）をすべて除去する
+    # AIに渡す前に、リプライ本文からメンション（@ユーザー名）とボット自身の名前を除去する
     cleaned_reply_text = re.sub(r'@[\w_]+', '', reply_text).strip()
+    cleaned_reply_text = re.sub(r'Maya|茉耶|まやぽん', '', cleaned_reply_text, flags=re.IGNORECASE).strip()
+    # 除去後に残った可能性のある不要な記号を先頭から削除
+    cleaned_reply_text = re.sub(r'^[…,:・、。]', '', cleaned_reply_text).strip()
+
+    # ★★★ 新しいロジック: 挨拶文に対するプログラム的な対応 ★★★
+    # 「おはようございます」「おはよう」などに対応
+    if "おはよう" in cleaned_reply_text or "おはよー" in cleaned_reply_text:
+        logging.info("リプライは「おはよう」の挨拶です。固定の挨拶を返します。")
+        return format_reply(f"おはよう{random.choice(['❤️', '🩷'])}", lang)
+    if "こんにちは" in cleaned_reply_text:
+        logging.info("リプライは「こんにちは」の挨拶です。固定の挨拶を返します。")
+        return format_reply(f"こんにちは{random.choice(['❤️', '🩷'])}", lang)
+    if "こんばんは" in cleaned_reply_text:
+        logging.info("リプライは「こんばんは」の挨拶です。固定の挨拶を返します。")
+        return format_reply(f"こんばんは{random.choice(['❤️', '🩷'])}", lang)
 
     # リプライが絵文字のみの場合の処理
     if is_emoji_only(cleaned_reply_text):
-        logging.info(f"リプライは絵文字のみです (言語: {lang})。固定の感謝メッセージを返します。")
-        # 言語に対応する感謝フレーズのリストを取得
-        thank_you_list = THANK_YOU_PHRASES.get(lang, THANK_YOU_PHRASES.get("und"))
-        if thank_you_list and isinstance(thank_you_list, list):
-            reply = random.choice(thank_you_list)
-            return format_reply(reply)
-        else: # 万が一、該当するキーがなかった場合やリストでない場合
+        logging.info(f"リプライは絵文字のみです。固定の感謝メッセージを返します。")
+        return "❤️"
+
+    # ★★★ 新しいロジック: ja以外の言語処理 ★★★
+    if lang != "ja":
+        if lang in THANK_YOU_PHRASES:
+            # 短文（コンテンツ部分が15文字以下）の場合は、定型句で返す
+            if len(cleaned_reply_text) <= 15:
+                thank_you_reply = random.choice(THANK_YOU_PHRASES[lang])
+                logging.info(f"言語({lang})の短文リプライです。定型句「{thank_you_reply}」を返します。")
+                return thank_you_reply
+            # 長文の場合は、この後のAI生成処理に進む
+            else:
+                logging.info(f"言語({lang})の長文リプライです。AIによる返信生成に進みます。")
+        else: # THANK_YOU_PHRASES にない言語コード (undなど)
+            logging.info(f"言語が日本語でもなく、対応リストにもない({lang})ため、固定の感謝メッセージ「❤️」を返します。")
             return "❤️"
 
-    # ja以外の言語の場合、固定の「ありがとう」メッセージを返す (絵文字のみでない場合)
-    if lang != "ja":
-        if lang in THANK_YOU_PHRASES and isinstance(THANK_YOU_PHRASES[lang], list):
-            reply = random.choice(THANK_YOU_PHRASES[lang])
-            return format_reply(reply)
-        else:
-            return "❤️"
+    # --- ここからAIによる返信生成 (対象: 日本語、または対応言語の長文) ---
 
     # ユーザー情報が存在する場合のみニックネームを取得
     if replier_id:
@@ -154,7 +173,20 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, g
             logging.info(f"ユーザーID: {replier_id} のニックネームは見つかりませんでした。")
     else:
         nickname = None
-        logging.info(f"ユーザーID: {replier_id} のニックネームは見つかりませんでした。")
+
+    # ★★★ 新しいロジック: 日本語の短文に対する簡潔な返信 ★★★
+    if lang == "ja" and not nickname and len(cleaned_reply_text) <= 15:
+        short_replies = [
+            "ありがとう🩷",
+            "嬉しいな🩷",
+            "えへへ、照れちゃうな🩷",
+            "ふふっ🩷",
+            "うんうん🩷",
+            "わーい🩷"
+        ]
+        chosen_reply = random.choice(short_replies)
+        logging.info(f"日本語の短文リプライです。固定の応答「{chosen_reply}」を返します。")
+        return chosen_reply
 
     original_tweet_content = row.get('original_tweet_content', '')
     cleaned_reply_text = re.sub(r'@[\w_]+', '', reply_text).strip()
@@ -169,15 +201,19 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, g
         prompt_parts.append(f'あなたの元のツイート：「{original_tweet_content}」')
 
     # AIへの指示を明確化
-    prompt_parts.extend([
-        "【返信文の作成ルール】",
-        "1. 上記のリプライ内容に対して、あなたの「返信の本文」だけを、自然で心のこもった短い文章で生成してください。**原則として1文で、長くても2文まで**です。",
-        "2. **重要：相手の名前（〇〇さん）や、あなた自身の名前（Maya）、挨拶（こんにちは、など）は絶対に入れないでください。** これらはプログラムが自動で対応するため、あなたの役割は返信の「本文」作成のみです。",
-        "3. 返信の語尾には、❤️か🩷のどちらか一つを必ず付けてください。文中や語尾に他の絵文字は一切入れないでください。",
-        "4. **超重要：相手のリプライが「うん」「えへへ」「❤️」のような、一言や絵文字のみの【超短文】である場合、あなたの返信も【超短文】でなければなりません。** これは絶対的なルールです。具体的には、「うふふ」「なになに？」「もう！」「やだー！」のような、ごく短い相槌や、相手の言葉を少し変えて返すだけにしてください。長い文章で返信することは**固く禁止**します。",
-        "5. 相手のリプライに性的なニュアンスが含まれている場合、困惑したり、恥ずかしがるような反応をしてください。決して喜んだり同意したりしないでください。",
-        "   （適切な返答の例：「えっ、何言ってるの…？❤️」「もう、冗談ばっかり…🩷」「そういうのは恥ずかしいよ…🩷」「心臓に悪いってば…！❤️」「そんなこと言われたら、どうしたらいいか分かんないよ…🩷」）"
-    ])
+    prompt_parts.append(REPLY_RULES_PROMPT)
+    
+    # ★★★ 新しいロジック: 外国語の短文リプライに対する追加指示 ★★★
+    if lang != 'ja':
+        # 簡易的な単語数カウント
+        word_count = len(cleaned_reply_text.split())
+        if word_count <= 3:
+            short_reply_prompt = (
+                "8. **【最重要追加ルール】** このリプライは3単語以下の「超短文」です。"
+                "あなたの返信も、必ず「Wow!」「Hehe」「Oh my...」のような、ごく短い一言の相槌にしてください。"
+                "長い文章での返信は絶対に許可されません。"
+            )
+            prompt_parts.append(short_reply_prompt)
 
     # --- 単語の重複を避けるための指示を追加 ---
     if generated_replies_history:
@@ -191,6 +227,20 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, g
         )
         prompt_parts.append(avoidance_prompt)
 
+    # ★★★ 新しいロジック: 外国語の場合は言語を指定する ★★★
+    if lang != 'ja' and lang in THANK_YOU_PHRASES:
+        language_name_map = {
+            "en": "英語 (English)", "es": "スペイン語 (Spanish)", "in": "インドネシア語 (Indonesian)",
+            "pt": "ポルトガル語 (Portuguese)", "tr": "トルコ語 (Turkish)", "fr": "フランス語 (French)",
+            "de": "ドイツ語 (German)", "zh": "中国語 (Chinese)", "ko": "韓国語 (Korean)"
+        }
+        language_name = language_name_map.get(lang, lang)
+        # 既存のルールの番号と競合しないように番号をふる
+        lang_prompt = (
+            f"7. **【最重要言語ルール】返信は必ず**{language_name}**で記述してください。** 日本語は絶対に使用しないでください。"
+        )
+        prompt_parts.append(lang_prompt)
+
     prompt = "\n".join(prompt_parts)
     logging.debug(f"生成されたプロンプト:\n{prompt}")
 
@@ -202,7 +252,7 @@ def generate_reply_for_row(row: pd.Series, original_tweet_content: str = None, g
         # AIが生成したテキストを後処理でクリーンアップし、その後フォーマットする
         raw_text = response.text
         cleaned_text = clean_generated_text(raw_text)
-        reply_body = format_reply(cleaned_text)
+        reply_body = format_reply(cleaned_text, lang)
 
         # ニックネームがある場合は、文頭に「ニックネーム＋改行」を付与する
         if nickname:
@@ -290,9 +340,18 @@ def main_process(input_csv: str, limit: int = None):
             
             if generated_reply:
                 df.loc[index, 'generated_reply'] = generated_reply
+                
                 # 履歴に追加するのは、ニックネームを除いた本文のみ
-                reply_body = generated_reply.split('\n')[-1]
-                generated_replies_for_session.append(reply_body)
+                reply_body = generated_reply
+                preference = get_user_preference(row['UserID'].lower())
+                if preference:
+                    nickname = preference[0]
+                    # Check if the generated reply starts with the nickname
+                    if generated_reply.startswith(f"{nickname}\n"):
+                        reply_body = generated_reply[len(nickname)+1:] # remove "nickname\n"
+
+                # 履歴をAIが解釈しやすいように、改行をスペースに置換して追加
+                generated_replies_for_session.append(reply_body.replace('\n', ' '))
 
             # 言語を検出して 'lang' 列に格納
             lang = detect_language(row['contents'])
@@ -303,7 +362,7 @@ def main_process(input_csv: str, limit: int = None):
             lang = detect_language(row['contents'])
             df.loc[index, 'lang'] = lang
             logging.info(f"インデックス {index}: is_my_threadがFalseのため、返信生成をスキップします。")
-
+    
     # 出力ファイルパスの生成
     base_name = os.path.basename(input_csv)
     name_part = base_name.replace('priority_replies_rechecked_', '')
