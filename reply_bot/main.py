@@ -4,8 +4,7 @@ from datetime import datetime
 
 # 各モジュールのメイン処理関数をインポート
 from .csv_generator import main_process as csv_generator_main
-from .thread_checker import main_process as thread_checker_main
-from .gen_reply import main_process as gen_reply_main
+from .reply_processor import main_process as reply_processor_main
 from .post_reply import main_process as post_reply_main
 from .config import HOURS_TO_COLLECT
 from .utils import setup_driver, close_driver
@@ -22,7 +21,6 @@ def main():
     driver = None
     try:
         # 最初にWebDriverを一度だけセットアップ
-        # ユーザーの記憶に基づき、デバッグ中はFalseを維持 [[memory:2213753]]
         driver = setup_driver(headless=False)
         if not driver:
             logging.error("WebDriverの初期化に失敗しました。処理を中断します。")
@@ -31,7 +29,7 @@ def main():
         # --------------------------------------------------------------------------
         # ステップ1: 通知ページからリプライを取得し、CSVを生成
         # --------------------------------------------------------------------------
-        logging.info("--- [ステップ1/4] リプライの取得とCSV生成を開始します ---")
+        logging.info("--- [ステップ1/3] リプライの取得とCSV生成を開始します ---")
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         initial_csv_path_template = os.path.join('output', f'extracted_tweets_{timestamp}.csv')
         
@@ -48,37 +46,24 @@ def main():
         
         
         # --------------------------------------------------------------------------
-        # ステップ2: スレッドの起点が自分か判定
+        # ステップ2: スレッド解析と返信生成
         # --------------------------------------------------------------------------
-        logging.info("--- [ステップ2/4] スレッド起点の判定を開始します ---")
-        rechecked_csv_path = thread_checker_main(driver, initial_csv_path)
+        logging.info("--- [ステップ2/3] スレッド解析と返信生成を開始します ---")
+        processed_csv_path = reply_processor_main(driver, initial_csv_path)
         
-        if not rechecked_csv_path or not os.path.exists(rechecked_csv_path):
-            logging.warning("ステップ2で判定済みCSVファイルが生成されませんでした。後続処理をスキップします。")
+        if not processed_csv_path or not os.path.exists(processed_csv_path):
+            logging.warning("ステップ2で処理済みCSVファイルが生成されませんでした。後続処理をスキップします。")
             logging.info("=== 自動返信システムを終了します ===")
             return
-        logging.info(f"スレッド起点の判定結果を {rechecked_csv_path} に保存しました。")
+        logging.info(f"スレッド解析と返信生成の結果を {processed_csv_path} に保存しました。")
             
 
         # --------------------------------------------------------------------------
-        # ステップ3: AIによる返信文の生成 (このステップはWebDriverを必要としない)
+        # ステップ3: いいね＆返信投稿 (デフォルトはドライラン)
         # --------------------------------------------------------------------------
-        logging.info("--- [ステップ3/4] AIによる返信文の生成を開始します ---")
-        generated_csv_path = gen_reply_main(rechecked_csv_path)
-
-        if not generated_csv_path or not os.path.exists(generated_csv_path):
-            logging.warning("ステップ3で返信生成済みCSVファイルが見つかりませんでした。後続処理をスキップします。")
-            logging.info("=== 自動返信システムを終了します ===")
-            return
-        logging.info(f"AIによる返信文を {generated_csv_path} に保存しました。")
-
-
-        # --------------------------------------------------------------------------
-        # ステップ4: いいね＆返信投稿 (デフォルトはドライラン)
-        # --------------------------------------------------------------------------
-        logging.info("--- [ステップ4/4] いいねと返信の投稿処理を開始します ---")
+        logging.info("--- [ステップ3/3] いいねと返信の投稿処理を開始します ---")
         # ここでは常にドライランで実行する。ライブ実行は手動を想定。
-        post_reply_main(driver, generated_csv_path, dry_run=True)
+        post_reply_main(driver, processed_csv_path, dry_run=True)
         
         logging.info("=== 全ての処理が正常に完了しました ===")
     
