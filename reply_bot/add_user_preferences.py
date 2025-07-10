@@ -45,6 +45,8 @@ def add_preferences_to_db():
         ("tuyahimefukujyu", "ふくじゅちゃん", "ja", ""),
         ("yualovedays", "ゆあちゃん", "ja", ""),
         ("yv6lwzy7tb41253", "コネリちゃん", "ja", ""),
+        ("f9r0MtEVKE60488", "まっくん", "ja", ""),
+        ("K2eWez2dZM2Ltsu", "まさちゃま", "ja", ""),
         ("zero_divide_00", "ゆみちゃん", "ja", ""),
     ]
 
