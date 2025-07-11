@@ -1,10 +1,9 @@
-snscrape
 BeautifulSoup4
-requests
-google-generativeai
-playwright
-selenium
-pytz
-pandas
 emoji
-pyperclip 
+google-generativeai
+pandas
+pyperclip
+pytz
+selenium
+snscrape
+webdriver-manager 

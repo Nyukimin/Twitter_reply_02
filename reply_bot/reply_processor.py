@@ -190,16 +190,79 @@ def fetch_and_analyze_thread(tweet_id: str, driver: webdriver.Chrome) -> dict:
         logging.error(f"スレッド解析中に予期せぬエラー: {e}", exc_info=True)
         return result
 
+# --- 返信品質チェック関数 (新規追加) ---
+def self_check_reply(
+    generated_reply: str,
+    thread_data: dict,
+    nickname: str | None,
+    banned_phrases: set
+) -> Tuple[bool, str]:
+    """
+    生成された返信が品質基準を満たしているかセルフチェックする。
+    """
+    # チェック1: 空文字列でないか
+    if not generated_reply or not generated_reply.strip():
+        return False, "生成された返信が空です。"
+
+    # チェック2: フォーマット（末尾の絵文字）
+    if not generated_reply.strip().endswith('🩷'):
+        return False, f"返信の末尾に意図した絵文字('🩷')が付いていません: {generated_reply}"
+
+    # チェック3: ニックネーム
+    if nickname and not generated_reply.startswith(nickname):
+        return False, f"ニックネーム '{nickname}' が返信の冒頭に含まれていません: {generated_reply}"
+
+    # チェック4: 禁止フレーズ
+    # ニックネームを除いた本文のみをチェック対象とする
+    reply_body = generated_reply.replace(f"{nickname}\n", "") if nickname else generated_reply
+    for phrase in banned_phrases:
+        if phrase in reply_body:
+            return False, f"禁止フレーズ '{phrase}' が含まれています: {reply_body}"
+
+    # チェック5: 言語
+    # AI生成の日本語返信のみを対象とする
+    expected_lang = thread_data.get("lang", "und")
+    if expected_lang == 'ja':
+        try:
+            from langdetect import detect, LangDetectException
+            detected_lang = detect(reply_body)
+            if detected_lang != 'ja':
+                return False, f"期待される言語 'ja' と異なる言語 '{detected_lang}' が検出されました: {reply_body}"
+        except (LangDetectException, ImportError):
+            logging.warning("言語検出ライブラリがないか、言語判定に失敗しました。言語チェックをスキップします。")
+
+
+    # チェック6: AIによる自己評価
+    try:
+        self_check_prompt = (
+            f"あなたは、以下のルールに基づいて文章を生成するAIです。\n\n"
+            f"--- ルール ---\n{MAYA_PERSONALITY_PROMPT}\n{REPLY_RULES_PROMPT}\n\n"
+            f"--- 生成された文章 ---\n{reply_body}\n\n"
+            f"--- 質問 ---\n上記の「生成された文章」は、あなた自身が定めた上記の「ルール」をすべて遵守していますか？\n"
+            f"YesかNoかのみで、理由を付けずに答えてください。"
+        )
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(self_check_prompt)
+        
+        # 回答が 'yes' (小文字、トリム) で始まらない場合はNG
+        if not response.text.strip().lower().startswith('yes'):
+            return False, f"AIによる自己評価で問題を検出しました。AIの回答: {response.text}"
+
+    except Exception as e:
+        logging.error(f"AI自己評価中にエラーが発生しました: {e}")
+        # 自己評価でエラーが起きた場合は、チェックをパスさせる（フェイルセーフ）
+        pass
+
+    return True, "すべてのチェックを通過しました。"
+
+
 # --- 返信生成メインロジック ---
 
 def generate_reply(thread_data: dict, history: list) -> str:
     """
     解析されたスレッド情報に基づき、適切な返信文を生成します。
+    この関数が呼ばれる時点で、返信対象であることは確定している前提。
     """
-    # 状況チェック
-    if thread_data["should_skip"] or not thread_data["is_my_thread"]:
-        return ""
-
     reply_text = thread_data["current_reply_text"]
     replier_id = thread_data["current_replier_id"]
     lang = thread_data["lang"]
@@ -285,6 +348,21 @@ def generate_reply(thread_data: dict, history: list) -> str:
         reply_body = format_reply(clean_generated_text(response.text), lang)
         
         final_reply = f"{nickname}\n{reply_body}" if nickname else reply_body
+
+        # --- セルフチェックの実行 ---
+        # banned_phrases はこのスコープで定義されている
+        is_ok, check_log = self_check_reply(
+            generated_reply=final_reply,
+            thread_data=thread_data,
+            nickname=nickname,
+            banned_phrases=banned_phrases if 'banned_phrases' in locals() else set()
+        )
+
+        if not is_ok:
+            logging.warning(f"返信ID {thread_data.get('tweet_id', 'N/A')} のセルフチェックで問題を発見: {check_log}")
+            logging.warning(f"  -> この返信は破棄されます: {final_reply.replace(chr(10), '<br>')}")
+            return "" # 問題があったため返信を空にする
+
         log_message = final_reply.replace('\n', '<br>')
         logging.info(f"生成された返信: {log_message}")
         return final_reply
@@ -304,35 +382,56 @@ def main_process(driver: webdriver.Chrome, input_csv: str, limit: int = None) ->
             logging.info(f"処理件数を {limit} 件に制限しました。")
         df.fillna('', inplace=True)
 
-        processed_count = 0
         generated_replies_history = []
+        rows_to_drop = [] # 削除対象の行インデックスを格納
 
         for index, row in df.iterrows():
             tweet_id = str(row['reply_id'])
             
             # --- スレッド解析 ---
             thread_data = fetch_and_analyze_thread(tweet_id, driver)
+            thread_data['tweet_id'] = tweet_id # ログ出力用にIDを追加
 
             # 取得したライブ情報でDataFrameを更新
             df.loc[index, 'reply_num'] = thread_data['live_reply_count']
             df.loc[index, 'like_num'] = thread_data['live_like_count']
             df.loc[index, 'is_my_thread'] = thread_data['is_my_thread']
 
-            # --- 返信生成 ---
-            if thread_data and not thread_data["should_skip"]:
+            # --- 返信生成の判断 ---
+            # 自分のスレッドで、かつスキップ対象でない場合のみ返信生成を試みる
+            if thread_data and not thread_data["should_skip"] and thread_data.get("is_my_thread", False):
                 generated_reply = generate_reply(thread_data, generated_replies_history)
                 df.loc[index, 'generated_reply'] = generated_reply
                 
                 if generated_reply:
-                    # 履歴にはニックネームを除いた本文のみ追加
+                    # セルフチェックを通過し、返信が正常に生成された
                     reply_body = generated_reply.split('\n')[-1]
                     generated_replies_history.append(reply_body.replace('\n', ' '))
+                else:
+                    # 返信生成を試みたが、セルフチェックで失敗した
+                    rows_to_drop.append(index)
             else:
-                logging.info("  -> 返信生成の対象外（自分のスレッドでない、またはスキップ対象）です。")
+                # そもそも返信対象外（自分のスレッドでない、またはスキップ対象）
+                logging.info(f"  -> Tweet ID {tweet_id} は返信生成の対象外です。")
+                df.loc[index, 'generated_reply'] = "" # 明示的に空にしておく
 
-        # --- 出力処理 ---
+        # --- 失敗した行の処理と出力 ---
         base_name = os.path.basename(input_csv)
         name_part = base_name.replace('extracted_tweets_', '')
+
+        if rows_to_drop:
+            # 失敗した行を新しいDataFrameとして抽出し、別ファイルに保存
+            failed_df = df.loc[rows_to_drop].copy()
+            failed_output_filename = os.path.join("output", f"failed_selfcheck_{name_part}")
+            failed_df.to_csv(failed_output_filename, index=False, encoding='utf-8-sig')
+            logging.info(f"セルフチェックに失敗した {len(rows_to_drop)} 件を {failed_output_filename} に保存しました。")
+
+            # 元のDataFrameから失敗した行を削除
+            df.drop(rows_to_drop, inplace=True)
+            logging.info("メインの処理対象から上記失敗件数を除外しました。")
+
+
+        # --- 正常な行の出力処理 ---
         output_filename = os.path.join("output", f"processed_replies_{name_part}")
         
         df.to_csv(output_filename, index=False, encoding='utf-8-sig')
