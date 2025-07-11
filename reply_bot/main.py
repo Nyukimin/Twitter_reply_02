@@ -1,6 +1,7 @@
 import logging
 import os
 from datetime import datetime
+import argparse # argparseをインポート
 
 # 各モジュールのメイン処理関数をインポート
 from .csv_generator import main_process as csv_generator_main
@@ -12,7 +13,7 @@ from .utils import setup_driver, close_driver
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def main():
+def main(timestamp_str: str | None = None):
     """
     自動返信システムのメイン処理フローを制御します。
     """
@@ -30,7 +31,15 @@ def main():
         # ステップ1: 通知ページからリプライを取得し、CSVを生成
         # --------------------------------------------------------------------------
         logging.info("--- [ステップ1/3] リプライの取得とCSV生成を開始します ---")
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        
+        # タイムスタンプの決定ロジック
+        if timestamp_str:
+            timestamp = timestamp_str
+            logging.info(f"指定されたタイムスタンプを使用します: {timestamp}")
+        else:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            logging.info(f"新しいタイムスタンプを生成しました: {timestamp}")
+
         initial_csv_path_template = os.path.join('output', f'extracted_tweets_{timestamp}.csv')
         
         initial_csv_path = csv_generator_main(
@@ -74,6 +83,14 @@ def main():
         logging.info("WebDriverを終了します。")
         close_driver()
 
-
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser(description="Twitter自動返信システムのメインコントローラー")
+    parser.add_argument(
+        "--timestamp",
+        type=str,
+        default=None,
+        help="出力ファイル名に使用するタイムスタンプ（例: 20250711_161308）。指定しない場合は現在時刻で自動生成されます。"
+    )
+    args = parser.parse_args()
+
+    main(timestamp_str=args.timestamp) 
