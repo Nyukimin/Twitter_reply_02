@@ -13,7 +13,7 @@ from .utils import setup_driver, close_driver
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def main(timestamp_str: str | None = None):
+def main(timestamp_str: str | None = None, hours_arg: int | None = None):
     """
     自動返信システムのメイン処理フローを制御します。
     """
@@ -42,10 +42,14 @@ def main(timestamp_str: str | None = None):
 
         initial_csv_path_template = os.path.join('output', f'extracted_tweets_{timestamp}.csv')
         
+        # 引数で時間が指定されていればそれを使い、なければconfigから読み込む
+        hours_to_use = hours_arg if hours_arg is not None else HOURS_TO_COLLECT
+        logging.info(f"データ収集期間: 過去 {hours_to_use} 時間")
+
         initial_csv_path = csv_generator_main(
             driver=driver,
             output_csv_path=initial_csv_path_template, 
-            hours_to_collect=HOURS_TO_COLLECT
+            hours_to_collect=hours_to_use
         )
         
         if not initial_csv_path or not os.path.exists(initial_csv_path):
@@ -91,6 +95,12 @@ if __name__ == "__main__":
         default=None,
         help="出力ファイル名に使用するタイムスタンプ（例: 20250711_161308）。指定しない場合は現在時刻で自動生成されます。"
     )
+    parser.add_argument(
+        "--hours",
+        type=int,
+        default=None,
+        help=f"収集するリプライの期間を時間で指定します。指定しない場合はconfig.pyの値({HOURS_TO_COLLECT}時間)が使われます。"
+    )
     args = parser.parse_args()
 
-    main(timestamp_str=args.timestamp) 
+    main(timestamp_str=args.timestamp, hours_arg=args.hours) 

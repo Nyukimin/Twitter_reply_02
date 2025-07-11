@@ -17,7 +17,7 @@ from selenium.webdriver.support import expected_conditions as EC
 
 from .config import (
     GEMINI_API_KEY, MAYA_PERSONALITY_PROMPT, THANK_YOU_PHRASES, 
-    REPLY_RULES_PROMPT, TARGET_USER
+    REPLY_RULES_PROMPT, TARGET_USER, GEMINI_MODEL_NAME
 )
 from .db import get_user_preference
 from .utils import setup_driver
@@ -60,6 +60,20 @@ def _get_tweet_text(article: BeautifulSoup) -> str:
     """記事要素からツイート本文を取得します。"""
     text_div = article.find('div', {'data-testid': 'tweetText'})
     return text_div.get_text(separator=' ', strip=True) if text_div else ""
+
+def _is_tweet_a_reply(article: BeautifulSoup) -> bool:
+    """
+    記事要素が返信ツイートであるか（UI上に「返信先:」等の表示があるか）を判定します。
+    スレッドのルート投稿（スレ主の投稿）にはこの表示がありません。
+    """
+    # UI上の返信先表示に使われるキーワード（多言語対応）
+    reply_pattern = re.compile(r'Replying to|返信先:')
+    
+    # BeautifulSoupのfind機能で、article要素内にキーワードに一致するテキストが存在するかを検索
+    found_text = article.find(string=reply_pattern)
+    
+    # テキストが見つかれば返信ツイート、見つからなければルートツイート（または単発ツイート）
+    return found_text is not None
 
 def _get_author_from_article(article: BeautifulSoup) -> str | None:
     """記事要素から投稿者のユーザーIDを取得します。"""
@@ -131,9 +145,16 @@ def fetch_and_analyze_thread(tweet_id: str, driver: webdriver.Chrome) -> dict:
             return result
         
         target_article = all_tweets[target_tweet_index]
+        root_article = all_tweets[0] # ページに表示されている一番上のツイート
 
-        # 【最重要ルール】ライブ情報に基づく優先返信判定
-        live_is_my_thread = (_get_author_from_article(all_tweets[0]) == TARGET_USER)
+        # 【新ロジック】ページ最上部のツイートが「スレの根っこ」かを判定
+        # 「返信先」表示がない場合、そのツイートはスレッドの起点（スレ主の投稿）である
+        is_root_of_thread = not _is_tweet_a_reply(root_article)
+        root_author = _get_author_from_article(root_article)
+        
+        # ライブ情報に基づく「スレ主」判定
+        live_is_my_thread = is_root_of_thread and (root_author == TARGET_USER)
+        
         live_reply_num = _get_live_reply_count(target_article)
         live_like_num = _get_live_like_count(target_article)
         result["is_my_thread"] = live_is_my_thread
@@ -147,13 +168,13 @@ def fetch_and_analyze_thread(tweet_id: str, driver: webdriver.Chrome) -> dict:
             num_future_replies = len(all_tweets) - (target_tweet_index + 1)
             logging.warning(
                 f"対象ツイートの後に {num_future_replies} 件の返信があり、"
-                f"かつ優先返信（ライブ情報: is_my_thread={live_is_my_thread}, reply_num={live_reply_num}）"
+                f"かつ優先返信（スレ主判定: {live_is_my_thread}, reply_num={live_reply_num}）"
                 "の条件を満たさないため、処理をスキップします。"
             )
             return result
         elif has_future_replies and is_priority_reply:
             logging.info(
-                f"未来の返信が存在しますが、優先返信ルール（ライブ情報: is_my_thread={live_is_my_thread}, "
+                f"未来の返信が存在しますが、優先返信ルール（スレ主判定: {live_is_my_thread}, "
                 f"reply_num={live_reply_num}）が適用されたため、処理を続行します。"
             )
 
@@ -167,10 +188,7 @@ def fetch_and_analyze_thread(tweet_id: str, driver: webdriver.Chrome) -> dict:
             text = _get_tweet_text(article)
             result["conversation_history"].append(f"@{author}: {text}")
 
-        # 起点と対象ツイートの情報を設定
-        root_author = _get_author_from_article(all_tweets[0])
-        result["is_my_thread"] = (root_author == TARGET_USER)
-        
+        # is_my_threadは新しいロジックで既に設定済み
         result["current_reply_text"] = _get_tweet_text(target_article)
         result["current_replier_id"] = _get_author_from_article(target_article)
         
@@ -241,7 +259,7 @@ def self_check_reply(
             f"--- 質問 ---\n上記の「生成された文章」は、あなた自身が定めた上記の「ルール」をすべて遵守していますか？\n"
             f"YesかNoかのみで、理由を付けずに答えてください。"
         )
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
         response = model.generate_content(self_check_prompt)
         
         # 回答が 'yes' (小文字、トリム) で始まらない場合はNG
@@ -343,7 +361,7 @@ def generate_reply(thread_data: dict, history: list) -> str:
     logging.debug(f"生成されたプロンプト:\n{prompt}")
 
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
         response = model.generate_content(prompt)
         reply_body = format_reply(clean_generated_text(response.text), lang)
         

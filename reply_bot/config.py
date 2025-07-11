@@ -6,13 +6,14 @@ PASSWORD      = "USHIneko1" # Xのログインに使用するパスワード
 # OPENAI_API_KEY= "sk-..."        # OpenAI APIキー
 DB_FILE       = "replies.db"    # SQLiteデータベースのファイル名
 GEMINI_API_KEY= "AIzaSyA7aSuSGwd2weVFYXbnbA1fIznLdbHqlbE" # Geminiを使用する場合
+GEMINI_MODEL_NAME = "gemini-2.0-flash-lite" # 使用するGeminiモデル名
 
 # スクロール設定
 MAX_SCROLLS   = 100  # 最大スクロール回数（デフォルト: 100）
 SCROLL_PIXELS = 3000  # 1回のスクロール量（ピクセル数）
 
 # データ収集期間の設定
-HOURS_TO_COLLECT = 24 # 何時間前までのリプライを収集するか (Noneの場合は無制限)
+HOURS_TO_COLLECT = 8 # 何時間前までのリプライを収集するか (Noneの場合は無制限)
 
 # タイムアウト設定
 LOGIN_TIMEOUT_ENABLED = False   # ログインタイムアウトを有効にするかどうか（True/False）
