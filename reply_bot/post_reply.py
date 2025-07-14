@@ -39,8 +39,8 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
         df['liked'] = False
     df['liked'] = df['liked'].fillna(False).astype(bool)
 
-    # generated_replyが空でない行に絞り込む
-    replies_to_process = df[df['generated_reply'].notna()].copy()
+    # 全ツイートを処理対象とする（いいね処理のため）
+    replies_to_process = df.copy()
     
     if limit is not None and limit > 0:
         logging.info(f"処理件数を {limit} 件に制限します。")
@@ -62,11 +62,6 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
             is_my_thread = row.get('is_my_thread', False)
             is_liked = row['liked']
             
-            # 「いいね」済み、かつ返信対象でないツイートは完全にスキップ
-            if is_liked and not is_my_thread:
-                logging.debug(f"tweet_id: {tweet_id} は処理済み（いいね済み、返信対象外）のためスキップします。")
-                continue
-
             logging.info(f"--- 処理中: {df.index.get_loc(index) + 1}/{len(df)} (tweet_id: {tweet_id}) ---")
             
             # 1. ページにアクセス
@@ -102,10 +97,10 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
             else:
                 logging.info(f"tweet_id: {tweet_id} はCSV上で「いいね」済みのためスキップします。")
 
-            # 3. 返信処理 (自分のスレッドの場合のみ動的にチェックして実行)
-            if is_my_thread:
+            # 3. 返信処理 (generated_replyが存在する場合のみ実行)
+            if generated_reply and str(generated_reply).strip():
                 should_reply = True
-                logging.info("自分のスレッドです。返信の重複チェック（後続ツイートの有無）を行います...")
+                logging.info("返信コメントが存在します。返信の重複チェック（後続ツイートの有無）を行います...")
                 try:
                     # ページ上に存在するすべてのツイート要素を取得
                     all_tweet_elements = driver.find_elements(By.XPATH, '//article[@data-testid="tweet"]')
@@ -167,7 +162,7 @@ def main_process(driver: webdriver.Chrome, input_csv: str, dry_run: bool = True,
                     logging.info("重複チェックにより返信がスキップされたため、クールダウンを省略して次の処理へ進みます。")
                     continue
             else:
-                logging.info(f"tweet_id: {tweet_id} は自分のスレッドではないため、返信対象外です。")
+                logging.info(f"tweet_id: {tweet_id} には返信コメントが生成されていないため、返信対象外です。")
 
             logging.info(f"次の処理までのクールダウン ({interval}秒)")
             time.sleep(interval)
