@@ -21,6 +21,7 @@ from .config import (
 )
 from .db import get_user_preference
 from .utils import setup_driver
+from .reply_detection_unified import detect_reply_unified
 
 # --- 初期設定 ---
 import json
@@ -111,7 +112,7 @@ def _get_tweet_text(article: BeautifulSoup) -> str:
 def _is_tweet_a_reply(article: BeautifulSoup) -> bool:
     """
     記事要素が返信ツイートであるか判定します。
-    複数の判定方法を組み合わせて確実に検出します。
+    改善された複数の判定方法を組み合わせて確実に検出します。
     """
     # ツイートIDを取得してログに記録
     tweet_id = _extract_tweet_id_for_debug(article)
@@ -119,7 +120,7 @@ def _is_tweet_a_reply(article: BeautifulSoup) -> bool:
     
     reply_judge_logger.info(f"=== 返信判定開始: ID={tweet_id}, Author={author} ===")
     
-    # 方法1: UI上の返信先表示テキストを検索（多言語対応）
+    # 方法1: 改善されたテキストパターン検索（多言語対応）
     reply_patterns = [
         r'Replying to',
         r'返信先:',
@@ -130,106 +131,157 @@ def _is_tweet_a_reply(article: BeautifulSoup) -> bool:
         r'Antwort an',      # ドイツ語
         r'回复',            # 中国語
         r'답글',            # 韓国語
+        r'In reply to',     # 英語バリエーション
+        r'Reply to',        # 英語短縮形
+        r'Re:',             # 短縮形
     ]
     
-    reply_judge_logger.debug(f"方法1: テキストパターン検索開始")
+    reply_judge_logger.debug(f"方法1: 改善テキストパターン検索開始")
+    all_text = article.get_text()
     for pattern in reply_patterns:
-        found = article.find(string=re.compile(pattern, re.IGNORECASE))
-        if found:
+        if re.search(pattern, all_text, re.IGNORECASE):
             reply_judge_logger.info(f"返信判定成功: テキストパターン '{pattern}' で検出")
-            reply_judge_logger.debug(f"  検出テキスト: '{found.strip()}'")
             return True
-        else:
-            reply_judge_logger.debug(f"  パターン '{pattern}': 未検出")
+        reply_judge_logger.debug(f"  パターン '{pattern}': 未検出")
     
-    # 方法2: data-testid属性による判定（返信ボタンを除外）
+    # 方法2: 改善されたセレクタ属性による判定
     reply_indicators = [
-        '[data-testid="inReplyTo"]',  # 正確な返信先表示のみ
-        '[aria-label*="Replying to"]'  # 返信先を示すaria-label
+        '[data-testid="inReplyTo"]',        # 従来の返信先表示要素
+        '[aria-label*="Replying to"]',      # 返信先を示すaria-label（英語）
+        '[aria-label*="返信先"]',            # 返信先を示すaria-label（日本語）
+        '[aria-label*="En respuesta a"]',   # スペイン語
+        '[aria-label*="Répondre à"]',       # フランス語
+        '[aria-labelledby*="reply"]',       # aria-labelledby属性
+        '[data-testid*="reply"]',           # 返信関連のdata-testid
+        '[role="button"][aria-label*="返信"]', # 返信ボタン（ただし除外条件あり）
     ]
     
-    reply_judge_logger.debug(f"方法2: data-testid属性検索開始")
+    reply_judge_logger.debug(f"方法2: 改善セレクタ属性検索開始")
     for selector in reply_indicators:
         elements = article.select(selector)
         if elements:
-            reply_judge_logger.info(f"返信判定成功: セレクタ '{selector}' で検出")
-            reply_judge_logger.debug(f"  検出要素数: {len(elements)}")
-            for i, elem in enumerate(elements[:3]):  # 最初の3つを表示
-                reply_judge_logger.debug(f"  要素{i+1}: {elem.name} - {elem.get('data-testid', '')} - {elem.get('aria-label', '')}")
-            return True
-        else:
-            reply_judge_logger.debug(f"  セレクタ '{selector}': 未検出")
+            # 返信ボタン自体は除外（返信先表示でない場合）
+            for elem in elements:
+                elem_text = elem.get_text().strip()
+                if ('button' in selector.lower() and 
+                    not any(keyword in elem_text.lower() for keyword in ['to', '先', '返信先'])):
+                    continue  # 返信ボタン自体はスキップ
+                
+                reply_judge_logger.info(f"返信判定成功: セレクタ '{selector}' で検出")
+                reply_judge_logger.debug(f"  要素テキスト: '{elem_text[:50]}...'")
+                return True
+        reply_judge_logger.debug(f"  セレクタ '{selector}': 未検出")
     
-    # 方法3: URL構造による判定
-    reply_judge_logger.debug(f"方法3: URL構造検索開始")
+    # 方法3: 改善されたURL構造による判定
+    reply_judge_logger.debug(f"方法3: 改善URL構造検索開始")
     links = article.find_all('a', href=True)
     reply_judge_logger.debug(f"  総リンク数: {len(links)}")
     
+    url_patterns = [
+        r'in_reply_to',     # URLパラメータでの返信判定
+        r'reply_to',        # reply_toパラメータ
+        r'/status/.*reply', # ステータスURLでreply含有
+    ]
+    
     for i, link in enumerate(links):
         href = link['href']
-        if '/status/' in href and 'reply' in href.lower():
-            reply_judge_logger.info(f"返信判定成功: URLパターンで検出 '{href}'")
-            return True
-        elif '/status/' in href:
+        for pattern in url_patterns:
+            if re.search(pattern, href, re.IGNORECASE):
+                reply_judge_logger.info(f"返信判定成功: URLパターン '{pattern}' で検出 '{href}'")
+                return True
+        if '/status/' in href and i < 10:  # 最初の10リンクのみログ出力
             reply_judge_logger.debug(f"  リンク{i+1}: {href} (返信パターンなし)")
     
-    # 方法4: DOM構造による判定（ツイート本文外の@メンション検出）
-    reply_judge_logger.debug(f"方法4: DOM構造検索開始")
+    # 方法4: 改善されたDOM構造による判定
+    reply_judge_logger.debug(f"方法4: 改善DOM構造検索開始")
     
-    # ツイート本文要素を特定
-    tweet_text_div = article.find('div', {'data-testid': 'tweetText'})
+    # ツイート本文要素を特定（複数のセレクタを試行）
+    tweet_text_div = (article.find('div', {'data-testid': 'tweetText'}) or 
+                      article.find('div', {'data-testid': 'tweetContent'}) or
+                      article.find('[data-testid*="text"]'))
     
-    # ツイート本文外でのみ@メンションを検索
-    parent_indicators = []
-    for elem in article.find_all(['span', 'div'], string=re.compile(r'@\w+', re.IGNORECASE)):
+    # 構造的な返信先検出
+    reply_keywords = ['replying', '返信', 'respuesta', 'répondre', 'antwort', '回复', '답글', 'reply to', 'in reply']
+    
+    # article内の全要素で@メンションと返信キーワードの組み合わせを検索
+    for elem in article.find_all(['span', 'div', 'a']):
+        elem_text = elem.get_text().strip()
+        if not elem_text:
+            continue
+            
         # ツイート本文内の@メンションは除外
         if tweet_text_div and elem in tweet_text_div.descendants:
             continue
-        # "返信先" "Replying to" などの文字列と組み合わさっている@メンションのみ対象
-        elem_text = elem.get_text().strip()
-        parent_text = elem.parent.get_text().strip() if elem.parent else ""
-        if any(keyword in parent_text.lower() for keyword in ['replying', '返信', 'respuesta', 'répondre', 'antwort', '回复', '답글']):
-            parent_indicators.append(elem)
-    
-    reply_judge_logger.debug(f"  返信先@メンション要素数: {len(parent_indicators)}")
-    
-    if parent_indicators:
-        reply_judge_logger.info(f"返信判定成功: 返信先@メンション({len(parent_indicators)}個)で検出")
-        for i, indicator in enumerate(parent_indicators[:3]):
-            reply_judge_logger.debug(f"  返信先@メンション{i+1}: '{indicator.get_text().strip()}'")
-        return True
-    
-    # 方法5: ツイート構造の詳細分析（より厳密な返信先検出）
-    reply_judge_logger.debug(f"方法5: ツイート構造詳細分析開始")
-    if tweet_text_div:
-        prev_siblings = tweet_text_div.find_all_previous('div')
-        reply_judge_logger.debug(f"  ツイートテキスト前の要素数: {len(prev_siblings)}")
+            
+        # @メンションと返信キーワードの両方が含まれているかチェック
+        has_mention = re.search(r'@\w+', elem_text)
+        has_reply_keyword = any(keyword in elem_text.lower() for keyword in reply_keywords)
         
-        for i, sibling in enumerate(prev_siblings[:5]):
-            sibling_text = sibling.get_text().strip()
-            # @メンションがあり、かつ返信関連のキーワードがある場合のみ
-            if (sibling_text and 
-                re.search(r'@\w+', sibling_text) and 
-                any(keyword in sibling_text.lower() for keyword in ['replying', '返信', 'respuesta', 'répondre', 'antwort', '回复', '답글'])):
-                reply_judge_logger.info(f"返信判定成功: 返信先情報で検出")
-                reply_judge_logger.debug(f"  検出要素{i+1}: '{sibling_text}'")
+        if has_mention and has_reply_keyword:
+            reply_judge_logger.info(f"返信判定成功: DOM構造で検出")
+            reply_judge_logger.debug(f"  検出要素: '{elem_text[:100]}'")
+            return True
+    
+    # 方法5: ツイート階層構造による判定
+    reply_judge_logger.debug(f"方法5: ツイート階層構造分析開始")
+    
+    # インデント・マージンによる返信階層の検出
+    style_attr = article.get('style', '')
+    parent_styles = []
+    current = article.parent
+    for _ in range(3):  # 親要素3階層まで確認
+        if current and hasattr(current, 'get'):
+            parent_style = current.get('style', '')
+            if parent_style:
+                parent_styles.append(parent_style)
+            current = current.parent
+        else:
+            break
+    
+    all_styles = [style_attr] + parent_styles
+    for style in all_styles:
+        # padding-left, margin-leftの値で階層判定
+        padding_match = re.search(r'padding-left:\s*(\d+)', style)
+        margin_match = re.search(r'margin-left:\s*(\d+)', style)
+        
+        if padding_match and int(padding_match.group(1)) > 20:  # 20px以上のpadding
+            reply_judge_logger.info(f"返信判定成功: 階層構造（padding）で検出")
+            reply_judge_logger.debug(f"  padding-left: {padding_match.group(1)}px")
+            return True
+            
+        if margin_match and int(margin_match.group(1)) > 20:  # 20px以上のmargin
+            reply_judge_logger.info(f"返信判定成功: 階層構造（margin）で検出")
+            reply_judge_logger.debug(f"  margin-left: {margin_match.group(1)}px")
+            return True
+    
+    # 方法6: 改善されたCSVデータとの照合判定
+    reply_judge_logger.debug(f"方法6: CSVデータ照合判定開始")
+    
+    # 既知の返信関係を示すdata属性の確認
+    special_attrs = ['data-tweet-depth', 'data-reply-level', 'data-conversation-id']
+    for attr in special_attrs:
+        if article.get(attr):
+            reply_judge_logger.info(f"返信判定成功: 特殊属性 '{attr}' で検出")
+            reply_judge_logger.debug(f"  属性値: {article.get(attr)}")
+            return True
+    
+    # 方法7: 文脈的判定（ユーザー名の出現パターン）
+    reply_judge_logger.debug(f"方法7: 文脈的判定開始")
+    
+    # 記事内の全テキストから@メンションを抽出
+    mentions = re.findall(r'@(\w+)', all_text)
+    if mentions:
+        # ツイート作者以外の@メンションがある場合（返信の可能性）
+        author_without_at = author.lstrip('@') if author else ""
+        other_mentions = [m for m in mentions if m != author_without_at]
+        
+        if other_mentions and len(other_mentions) <= 3:  # 適度な数の他ユーザーへの言及
+            # ツイート本文の最初の方に@メンションがある場合（返信パターン）
+            first_50_chars = all_text[:50]
+            if any(f'@{mention}' in first_50_chars for mention in other_mentions):
+                reply_judge_logger.info(f"返信判定成功: 文脈的判定で検出")
+                reply_judge_logger.debug(f"  他ユーザーへの言及: {other_mentions}")
                 return True
-            elif sibling_text:
-                reply_judge_logger.debug(f"  要素{i+1}: '{sibling_text[:50]}...' (返信先パターンなし)")
-    else:
-        reply_judge_logger.debug("  ツイートテキスト要素が見つかりません")
-    
-    # 方法6: 新しい判定方法 - article要素のclass属性をチェック
-    reply_judge_logger.debug(f"方法6: article要素のclass属性チェック")
-    article_classes = article.get('class', [])
-    reply_judge_logger.debug(f"  articleクラス: {article_classes}")
-    
-    # 方法7: data-testid="tweet"の親要素をチェック
-    reply_judge_logger.debug(f"方法7: 親要素構造チェック")
-    parent = article.parent
-    if parent:
-        parent_attrs = {k: v for k, v in parent.attrs.items() if k in ['class', 'data-testid', 'role']}
-        reply_judge_logger.debug(f"  親要素属性: {parent_attrs}")
     
     reply_judge_logger.info(f"返信判定結果: 非返信ツイートと判定 (ID={tweet_id})")
     return False
@@ -331,7 +383,13 @@ def _extract_tweet_data(article: BeautifulSoup) -> dict:
         
         author = _get_author_from_article(article)
         text = _get_tweet_text(article)
-        is_reply = _is_tweet_a_reply(article)
+        
+        # 統合返信判定を使用（フォールバック付き）
+        try:
+            is_reply = detect_reply_unified(article, tweet_id)
+        except Exception as e:
+            thread_debug_logger.warning(f"統合返信判定でエラー、従来方法にフォールバック: {e}")
+            is_reply = _is_tweet_a_reply(article)
         
         # デバッグログ出力
         thread_debug_logger.debug(f"ツイートデータ抽出結果:")
