@@ -10,8 +10,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium import webdriver
 
-from .utils import setup_driver
+from .utils import setup_driver, check_memory_usage, force_restart_driver
 from .config import POST_INTERVAL_SECONDS, TARGET_USER
+from .webdriver_stabilizer import WebDriverStabilizer, safe_execute, handle_webdriver_error
 
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

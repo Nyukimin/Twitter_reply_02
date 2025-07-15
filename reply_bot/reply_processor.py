@@ -753,21 +753,74 @@ def self_check_reply(
         if phrase in reply_body:
             return False, f"禁止フレーズ '{phrase}' が含まれています: {reply_body}"
 
-    # チェック5: 言語一貫性
+    # チェック5: 言語一貫性の強化
     expected_lang = thread_data.get("lang", "und")
-    if expected_lang == 'ja':
-        # 日本語の文脈で外国語が混入していないかチェック
-        foreign_words = re.findall(r'\b(?:Gracias|Thanks?|Hello|Goodbye|Merci|Danke|Ciao)\b', reply_body, re.IGNORECASE)
-        if foreign_words:
-            return False, f"日本語の文脈で外国語 '{', '.join(foreign_words)}' が検出されました: {reply_body}"
+    
+    # 言語検出ライブラリによる自動判定
+    try:
+        from langdetect import detect, LangDetectException
+        detected_lang = detect(reply_body)
         
-        try:
-            from langdetect import detect, LangDetectException
-            detected_lang = detect(reply_body)
-            if detected_lang != 'ja':
-                return False, f"期待される言語 'ja' と異なる言語 '{detected_lang}' が検出されました: {reply_body}"
-        except (LangDetectException, ImportError):
-            logging.warning("言語検出ライブラリがないか、言語判定に失敗しました。言語チェックをスキップします。")
+        # 期待される言語と検出された言語が一致しない場合
+        if expected_lang != 'und' and detected_lang != expected_lang:
+            return False, f"期待される言語 '{expected_lang}' と検出された言語 '{detected_lang}' が一致しません: {reply_body}"
+            
+    except (LangDetectException, ImportError):
+        logging.warning("言語検出ライブラリがないか、言語判定に失敗しました。パターンベースのチェックを実行します。")
+        
+        # パターンベースの言語チェック
+        if expected_lang == 'ja':
+            # 日本語期待時の外国語チェック
+            foreign_patterns = [
+                r'\b(?:Gracias|Thanks?|Hello|Goodbye|Merci|Danke|Ciao|Good morning|Good night)\b',  # 英語・その他
+                r'[\u0590-\u05FF]',  # ヘブライ語
+                r'[\u0600-\u06FF]',  # アラビア語
+                r'[\u0E00-\u0E7F]',  # タイ語
+                r'[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]',  # ハングル（韓国語）
+                r'[\u4E00-\u9FFF](?=.*[a-zA-Z])|[a-zA-Z](?=.*[\u4E00-\u9FFF])',  # 中国語と英語の混在
+            ]
+            
+            for pattern in foreign_patterns:
+                matches = re.findall(pattern, reply_body, re.IGNORECASE)
+                if matches:
+                    return False, f"日本語の文脈で外国語文字・単語が検出されました: {matches} in {reply_body}"
+                    
+        elif expected_lang == 'en':
+            # 英語期待時の他言語チェック
+            non_english_patterns = [
+                r'[\u3040-\u309F\u30A0-\u30FF]',  # ひらがな・カタカナ
+                r'[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]',  # ハングル
+                r'[\u4E00-\u9FFF]',  # 中国語
+            ]
+            
+            for pattern in non_english_patterns:
+                matches = re.findall(pattern, reply_body)
+                if matches:
+                    return False, f"英語の文脈で他言語文字が検出されました: {matches} in {reply_body}"
+                    
+        elif expected_lang == 'ko':
+            # 韓国語期待時の他言語チェック
+            non_korean_patterns = [
+                r'[\u3040-\u309F\u30A0-\u30FF]',  # ひらがな・カタカナ
+                r'[\u4E00-\u9FFF]',  # 中国語
+            ]
+            
+            for pattern in non_korean_patterns:
+                matches = re.findall(pattern, reply_body)
+                if matches:
+                    return False, f"韓国語の文脈で他言語文字が検出されました: {matches} in {reply_body}"
+                    
+        elif expected_lang == 'zh':
+            # 中国語期待時の他言語チェック
+            non_chinese_patterns = [
+                r'[\u3040-\u309F\u30A0-\u30FF]',  # ひらがな・カタカナ
+                r'[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]',  # ハングル
+            ]
+            
+            for pattern in non_chinese_patterns:
+                matches = re.findall(pattern, reply_body)
+                if matches:
+                    return False, f"中国語の文脈で他言語文字が検出されました: {matches} in {reply_body}"
 
 
     # チェック6: AIによる自己評価

@@ -254,7 +254,28 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("最終的な通知（メンション）ページの読み込み完了。")
-            time.sleep(5)  # 完全ロードを待機
+            
+            # 最新データを確実に取得するため、更新処理を実行
+            logging.info("最新データ取得のためページの更新処理を実行します...")
+            driver.refresh()
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            logging.info("ページ更新完了。")
+            
+            # 複数回の軽いスクロールで最新ツイートを確実に読み込む
+            logging.info("最新ツイートを確実に読み込むため、複数回のスクロールを実行します...")
+            for i in range(3):
+                logging.info(f"初期スクロール {i+1}/3 回目...")
+                driver.execute_script("window.scrollTo(0, 0);")  # 最上部に移動
+                time.sleep(2)
+                driver.execute_script("window.scrollBy(0, 500);")  # 軽くスクロール
+                time.sleep(2)
+                driver.execute_script("window.scrollBy(0, -500);")  # 元に戻す
+                time.sleep(2)
+            
+            logging.info("最新ツイート確認のための最終待機中...")
+            time.sleep(10)  # 最新ツイートの完全ロードを待機
             
         except TimeoutException:
             logging.error(f"ナビゲーションシーケンス中にタイムアウトが発生しました（{PAGE_LOAD_TIMEOUT_SECONDS}秒）。処理を中断します。")
@@ -264,7 +285,45 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
 
         # 0ページ目（初回ページ）のデータ取得
         logging.info("0ページ目（初回ページ）のデータ取得を開始します...")
-        time.sleep(5)  # 初回ページの完全ロードを待機
+        
+        # 最新ツイートが確実に表示されるまで待機とチェック
+        logging.info("最新ツイートの表示を確認中...")
+        max_wait_attempts = 10
+        for attempt in range(max_wait_attempts):
+            time.sleep(3)
+            current_source = driver.page_source
+            soup_check = BeautifulSoup(current_source, 'html.parser')
+            tweets_check = soup_check.find_all('article', {'data-testid': 'tweet'})
+            
+            if tweets_check:
+                # 最初のツイートの時刻を確認
+                first_tweet_info = _extract_tweet_info(tweets_check[0])
+                if first_tweet_info:
+                    first_tweet_time = datetime.fromisoformat(first_tweet_info["date_time"])
+                    current_time = datetime.now(jst)
+                    time_diff = current_time - first_tweet_time
+                    logging.info(f"最初のツイート時刻: {first_tweet_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    logging.info(f"現在時刻: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    logging.info(f"時間差: {time_diff}")
+                    
+                    # 最新ツイートが15分以内であれば処理を続行
+                    if time_diff.total_seconds() <= 900:  # 15分以内
+                        logging.info("最新ツイートが確認できました。データ取得を続行します。")
+                        break
+                    else:
+                        logging.info(f"最新ツイートが古すぎます（{time_diff}）。再試行します...")
+                        if attempt < max_wait_attempts - 1:
+                            driver.refresh()
+                            time.sleep(3)
+                            continue
+                        else:
+                            logging.warning("最新ツイートの取得に失敗しました。古いデータで処理を続行します。")
+                            break
+            
+            if attempt == max_wait_attempts - 1:
+                logging.warning("最新ツイートの確認に失敗しました。処理を続行します。")
+        
+        time.sleep(2)  # 最終的な安定化待機
         
         # 0ページ目のHTMLソースを保存
         initial_html_source = driver.page_source

@@ -7,13 +7,13 @@ import argparse # argparseをインポート
 from .csv_generator import main_process as csv_generator_main
 from .reply_processor import main_process as reply_processor_main
 from .post_reply import main_process as post_reply_main
-from .config import HOURS_TO_COLLECT
+from .config import HOURS_TO_COLLECT, POST_INTERVAL_SECONDS
 from .utils import setup_driver, close_driver
 
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def main(timestamp_str: str | None = None, hours_arg: int | None = None):
+def main(timestamp_str: str | None = None, hours_arg: int | None = None, live_run: bool = False):
     """
     自動返信システムのメイン処理フローを制御します。
     """
@@ -75,8 +75,13 @@ def main(timestamp_str: str | None = None, hours_arg: int | None = None):
         # ステップ3: いいね＆返信投稿 (デフォルトはドライラン)
         # --------------------------------------------------------------------------
         logging.info("--- [ステップ3/3] いいねと返信の投稿処理を開始します ---")
-        # ここでは常にドライランで実行する。ライブ実行は手動を想定。
-        post_reply_main(driver, processed_csv_path, dry_run=True)
+        # live_runフラグに基づいてドライランまたは実際の投稿を実行
+        is_dry_run = not live_run
+        if live_run:
+            logging.warning("*** LIVE-RUN モードで実行します。実際に投稿・いいねが行われます ***")
+        else:
+            logging.info("ドライランモードで実行します。実際の投稿・いいねは行われません。")
+        post_reply_main(driver, processed_csv_path, dry_run=is_dry_run, interval=POST_INTERVAL_SECONDS)
         
         logging.info("=== 全ての処理が正常に完了しました ===")
     
@@ -101,6 +106,11 @@ if __name__ == "__main__":
         default=None,
         help=f"収集するリプライの期間を時間で指定します。指定しない場合はconfig.pyの値({HOURS_TO_COLLECT}時間)が使われます。"
     )
+    parser.add_argument(
+        "--live-run",
+        action='store_true',
+        help="このフラグを立てると、実際に投稿やいいねを行います（ドライランを無効化）。"
+    )
     args = parser.parse_args()
 
-    main(timestamp_str=args.timestamp, hours_arg=args.hours) 
+    main(timestamp_str=args.timestamp, hours_arg=args.hours, live_run=args.live_run) 

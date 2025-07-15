@@ -2,6 +2,7 @@ import logging
 import pickle
 import os
 import time
+import psutil
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -17,6 +18,8 @@ COOKIE_FILE = "cookie/twitter_cookies_01.pkl"
 
 # WebDriverインスタンスを保持するグローバル変数
 _driver: webdriver.Chrome | None = None
+_driver_process_count = 0  # WebDriverの起動回数をカウント
+_memory_monitor_enabled = True  # メモリ監視の有効/無効フラグ
 
 def get_driver(headless: bool = True) -> webdriver.Chrome:
     """
@@ -82,34 +85,110 @@ def get_driver(headless: bool = True) -> webdriver.Chrome:
             
     return _driver
 
+def check_memory_usage():
+    """
+    現在のメモリ使用量を確認し、ログに記録します。
+    """
+    if not _memory_monitor_enabled:
+        return
+    
+    try:
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        logging.info(f"現在のメモリ使用量: {memory_mb:.1f} MB")
+        
+        # 500MB以上の場合は警告
+        if memory_mb > 500:
+            logging.warning(f"メモリ使用量が高くなっています: {memory_mb:.1f} MB")
+            
+        return memory_mb
+    except Exception as e:
+        logging.warning(f"メモリ使用量の確認中にエラー: {e}")
+        return None
+
+def force_restart_driver(headless: bool = True):
+    """
+    WebDriverを強制的に再起動します。
+    メモリリークやクラッシュからの回復に使用します。
+    """
+    global _driver, _driver_process_count
+    
+    logging.warning("WebDriverの強制再起動を実行します...")
+    
+    # 既存のWebDriverを終了
+    if _driver:
+        try:
+            _driver.quit()
+            logging.info("既存のWebDriverを終了しました。")
+        except Exception as e:
+            logging.warning(f"WebDriver終了時にエラー（無視して続行）: {e}")
+        finally:
+            _driver = None
+    
+    # プロセスの完全終了を待機
+    time.sleep(2)
+    
+    # 新しいWebDriverを起動
+    try:
+        _driver = setup_driver(headless=headless)
+        _driver_process_count += 1
+        logging.info(f"WebDriverを再起動しました（起動回数: {_driver_process_count}）")
+        check_memory_usage()
+        return _driver
+    except Exception as e:
+        logging.error(f"WebDriverの再起動中にエラー: {e}")
+        return None
+
 def close_driver():
     """
     グローバルなWebDriverインスタンスを終了します。
     """
     global _driver
     if _driver:
-        _driver.quit()
-        _driver = None
-        logging.info("WebDriverインスタンスを終了しました。")
+        try:
+            _driver.quit()
+            logging.info("WebDriverインスタンスを終了しました。")
+        except Exception as e:
+            logging.warning(f"WebDriver終了時にエラー（無視して続行）: {e}")
+        finally:
+            _driver = None
+            check_memory_usage()
 
 def setup_driver(headless: bool = True, max_retries: int = 3) -> webdriver.Chrome | None:
     """
     Selenium WebDriverをセットアップし、Cookieを使ってログイン状態を復元します。
     ホームページの読み込みに失敗した場合、指定された回数だけ再試行します。
     """
+    global _driver_process_count
+    
     options = Options()
     if headless:
         options.add_argument("--headless")
         logging.info("ヘッドレスモードでWebDriverを起動します。")
+    
+    # メモリリーク対策とパフォーマンス向上のオプション
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-images")  # 画像読み込みを無効化
+    options.add_argument("--disable-javascript")  # JavaScriptを無効化（必要に応じて）
+    options.add_argument("--memory-pressure-off")  # メモリ圧迫制御を無効化
+    options.add_argument("--max_old_space_size=4096")  # メモリ制限を設定
     options.add_argument('--log-level=3') # INFO, WARNING, ERROR 以外のログを抑制
+    
+    # メモリ使用量を監視
+    check_memory_usage()
 
     # WebDriverのセットアップ
     try:
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
-        logging.info("新しいWebDriverインスタンスを初期化しました。")
+        _driver_process_count += 1
+        logging.info(f"新しいWebDriverインスタンスを初期化しました（起動回数: {_driver_process_count}）")
+        check_memory_usage()
     except Exception as e:
         logging.error(f"WebDriverの初期化中にエラーが発生しました: {e}")
         return None
