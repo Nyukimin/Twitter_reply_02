@@ -83,6 +83,15 @@ THANK_YOU_PHRASES = {
 
 # 返信生成AIに渡すルールセット
 REPLY_RULES_PROMPT = """
+
+# Profile認証関連の新設定
+# Profile認証設定
+TWITTER_PROFILE_NAME = "twitter_main"    # 使用するProfile名
+PROFILES_DIR = "./profiles"              # Profile保存ディレクトリ
+USE_PROFILE_AUTH = True                  # Profile認証の有効化
+
+# 移行期間中の設定
+LEGACY_COOKIE_SUPPORT = False            # Cookie認証のサポート（将来削除）
 【返信文の作成ルール】
 1. 上記のリプライ内容に対して、あなたの「返信の本文」だけを、自然で心のこもった短い文章で生成してください。**原則として1文で、長くても2文まで**です。
 2. **重要：相手の名前（〇〇さん）や、あなた自身の名前（Maya）、挨拶（こんにちは、など）は絶対に入れないでください。** これらはプログラムが自動で対応するため、あなたの役割は返信の「本文」作成のみです。
