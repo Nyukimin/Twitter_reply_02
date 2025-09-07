@@ -13,7 +13,7 @@ from .utils import setup_driver, close_driver
 # ロギング設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def main(timestamp_str: str | None = None, hours_arg: int | None = None, live_run: bool = False):
+def main(timestamp_str: str | None = None, hours_arg: int | None = None, live_run: bool = False, headless: bool = False):
     """
     自動返信システムのメイン処理フローを制御します。
     """
@@ -22,7 +22,7 @@ def main(timestamp_str: str | None = None, hours_arg: int | None = None, live_ru
     driver = None
     try:
         # 最初にWebDriverを一度だけセットアップ
-        driver = setup_driver(headless=False)
+        driver = setup_driver(headless=headless)
         if not driver:
             logging.error("WebDriverの初期化に失敗しました。処理を中断します。")
             return
@@ -111,6 +111,11 @@ if __name__ == "__main__":
         action='store_true',
         help="このフラグを立てると、実際に投稿やいいねを行います（ドライランを無効化）。"
     )
+    parser.add_argument(
+        "--headless",
+        action='store_true',
+        help="このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。"
+    )
     args = parser.parse_args()
 
-    main(timestamp_str=args.timestamp, hours_arg=args.hours, live_run=args.live_run) 
+    main(timestamp_str=args.timestamp, hours_arg=args.hours, live_run=args.live_run, headless=args.headless)

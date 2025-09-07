@@ -1037,11 +1037,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="スレッドを解析し、文脈に応じた返信を生成します。")
     parser.add_argument("input_csv", help="入力CSVファイルのパス (extracted_tweets_...csv)")
     parser.add_argument("--limit", type=int, help="処理するリプライの最大数")
+    parser.add_argument("--headless", action='store_true', help="このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。")
     args = parser.parse_args()
 
     driver = None
     try:
-        driver = setup_driver(headless=False)
+        driver = setup_driver(headless=args.headless)
         if driver:
             main_process(driver, args.input_csv, args.limit)
     finally:

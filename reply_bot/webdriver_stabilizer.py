@@ -16,10 +16,11 @@ class WebDriverStabilizer:
     WebDriverの安定性を向上させるためのラッパークラス
     """
     
-    def __init__(self, driver: webdriver.Chrome, max_retries: int = 3, memory_threshold: float = 600.0):
+    def __init__(self, driver: webdriver.Chrome, max_retries: int = 3, memory_threshold: float = 600.0, headless: bool = False):
         self.driver = driver
         self.max_retries = max_retries
         self.memory_threshold = memory_threshold  # MB
+        self.headless = headless
         self.error_count = 0
         self.last_restart_time = 0
         self.min_restart_interval = 300  # 5分間隔で再起動制限
@@ -107,7 +108,7 @@ class WebDriverStabilizer:
             logging.warning(f"エラー数が閾値を超えました（{self.error_count}回）。WebDriverを再起動します。")
         
         try:
-            self.driver = force_restart_driver(headless=False)  # main.pyではheadless=False
+            self.driver = force_restart_driver(headless=self.headless)
             self.last_restart_time = current_time
             self.error_count = 0
             logging.info("WebDriverの再起動が完了しました。")
@@ -115,11 +116,11 @@ class WebDriverStabilizer:
             logging.error(f"WebDriverの再起動中にエラー: {e}")
             raise e
 
-def safe_execute(driver: webdriver.Chrome, func: Callable, *args, **kwargs) -> Any:
+def safe_execute(driver: webdriver.Chrome, func: Callable, headless: bool = False, *args, **kwargs) -> Any:
     """
     WebDriverStabilizerを使用して関数を安全に実行するヘルパー関数
     """
-    stabilizer = WebDriverStabilizer(driver)
+    stabilizer = WebDriverStabilizer(driver, headless=headless)
     return stabilizer.execute_with_retry(func, *args, **kwargs)
 
 def handle_webdriver_error(func: Callable) -> Callable:

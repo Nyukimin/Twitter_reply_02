@@ -185,6 +185,7 @@ if __name__ == '__main__':
     parser.add_argument('--live-run', action='store_true', help='このフラグを立てると、実際に投稿やいいねを行います（ドライランを無効化）。')
     parser.add_argument('--limit', type=int, default=None, help='処理するツイートの最大数を指定します。')
     parser.add_argument('--interval', type=int, default=None, help=f'投稿間の待機時間（秒）。指定しない場合はconfig.pyの値({POST_INTERVAL_SECONDS}秒)が使われます。')
+    parser.add_argument('--headless', action='store_true', help='このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。')
     
     args = parser.parse_args()
     
@@ -197,8 +198,7 @@ if __name__ == '__main__':
     # 単体実行時のみ、driverの起動と終了をここで行う
     driver = None
     try:
-        # ユーザーの記憶に基づき、デバッグ中はFalseを維持 [[memory:2213753]]
-        driver = setup_driver(headless=False)
+        driver = setup_driver(headless=args.headless)
         if driver:
             main_process(driver, args.input_csv, dry_run=is_dry_run, limit=args.limit, interval=interval_to_use)
     finally:

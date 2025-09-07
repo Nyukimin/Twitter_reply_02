@@ -1,4 +1,4 @@
-# Twitter自動返信ボット (v0.94)
+# Twitter自動返信ボット (v0.95)
 
 ## 概要
 このシステムは、あなた（@nyukimi_AI）のX（旧Twitter）アカウントのツイートに対する他ユーザーからのリプライを自動的に検出し、AI（「Maya」）が文脈を理解した応答文を生成・投稿することを目的としています。**システムのコアは `reply_processor.py` に集約されており、単なる返信だけでなく、会話の文脈全体を考慮したインテリジェントな対話を実現します。**
@@ -7,7 +7,12 @@
 
 ## バージョン履歴
 
-### **v0.94 (現在)**: インテリジェント返信処理への進化
+### **v0.95 (現在)**: ブラウザ表示モード制御機能の追加
+- **ヘッドレスモード対応**: 全てのスクリプト（`main.py`, `csv_generator.py`, `reply_processor.py`, `post_reply.py`, `check_login_status.py`）に`--headless`オプションを追加。ブラウザを非表示で高速実行可能になりました。
+- **デバッグ支援**: デフォルトはGUIモードのため、開発・デバッグ時はブラウザの動作を目視確認でき、本番運用時はヘッドレスモードで効率的に動作します。
+- **運用の柔軟性向上**: `cron`等の定期実行では`--headless`を使用し、手動実行時はGUIで状況確認する使い分けが可能になりました。
+
+### **v0.94**: インテリジェント返信処理への進化
 - **アーキテクチャ刷新**: `thread_checker.py`と`gen_reply.py`を廃止し、スレッド解析、AIによる返信生成、投稿前チェックの全機能を`reply_bot/reply_processor.py`に統合。処理が効率化され、モジュール間の依存関係が簡潔になりました。
 - **AIの文脈理解能力の向上**: AIにスレッド全体の会話履歴を渡すことで、より文脈に沿った自然な返信が可能になりました。
 - **返信の多様性向上**:
@@ -114,20 +119,132 @@ python -m reply_bot.add_user_preferences
 ```
 
 ### 6. スクリプトの実行
+
+#### 基本的な実行方法
 全てのセットアップが完了したら、`main.py` を実行します。
 ```bash
+# ドライランモード（デフォルト）- 投稿やいいねを行わずにテスト実行
 python -m reply_bot.main
-```
-デフォルトでは、投稿や「いいね」を行わない**ドライランモード**で実行されます。実際に投稿するには `--live-run` フラグを追加します。
-```bash
+
+# ライブモード - 実際に投稿やいいねを実行
 python -m reply_bot.main --live-run
 ```
 
+#### ブラウザ表示モードの制御
+v0.95から、各スクリプトで**ブラウザの表示/非表示を選択**できるようになりました。
+
+**ブラウザ表示モード（GUI）** - デバッグや動作確認に最適：
+```bash
+# メイン処理（デフォルトでブラウザ表示）
+python -m reply_bot.main
+
+# 各個別モジュールも同様
+python -m reply_bot.csv_generator
+python -m reply_bot.reply_processor input.csv
+python -m reply_bot.post_reply input.csv
+python -m reply_bot.check_login_status
+```
+
+**ヘッドレスモード（非表示）** - 本番運用や高速処理に最適：
+```bash
+# メイン処理をヘッドレスモードで実行
+python -m reply_bot.main --headless
+
+# リプライ収集をヘッドレスモードで実行
+python -m reply_bot.csv_generator --headless
+
+# スレッド解析と返信生成をヘッドレスモードで実行
+python -m reply_bot.reply_processor input.csv --headless
+
+# 投稿処理をヘッドレスモードで実行
+python -m reply_bot.post_reply input.csv --headless
+
+# ログイン状態確認をヘッドレスモードで実行
+python -m reply_bot.check_login_status --headless
+```
+
+#### 実行オプションの詳細
+
+**`main.py`** - メインコントローラー（全処理を自動実行）
+```bash
+# 基本形式
+python -m reply_bot.main [オプション]
+
+# 利用可能オプション
+--timestamp YYYYMMDD_HHMMSS  # 出力ファイル名のタイムスタンプを指定
+--hours N                    # 過去N時間のリプライのみ収集
+--live-run                   # ドライランを無効化し、実際に投稿・いいねを実行
+--headless                   # ブラウザを非表示で起動
+
+# 実行例
+python -m reply_bot.main --hours 12 --headless --live-run
+```
+
+**`csv_generator.py`** - リプライ収集モジュール
+```bash
+# 基本形式
+python -m reply_bot.csv_generator [オプション]
+
+# 利用可能オプション
+--output PATH               # 出力CSVファイルのパス指定
+--scrolls N                 # 最大スクロール回数（デフォルト: 100）
+--pixels N                  # 1回のスクロール量（デフォルト: 3000px）
+--hours N                   # 過去N時間のリプライのみ収集
+--headless                  # ブラウザを非表示で起動
+
+# 実行例：過去6時間のリプライを高速収集
+python -m reply_bot.csv_generator --hours 6 --headless --scrolls 50
+```
+
+**`reply_processor.py`** - スレッド解析・返信生成モジュール
+```bash
+# 基本形式
+python -m reply_bot.reply_processor INPUT_CSV [オプション]
+
+# 利用可能オプション
+--limit N                   # 処理するリプライの最大数
+--headless                  # ブラウザを非表示で起動
+
+# 実行例：最大20件のリプライを処理
+python -m reply_bot.reply_processor output/extracted_tweets_20250107_120000.csv --limit 20 --headless
+```
+
+**`post_reply.py`** - 投稿・いいね実行モジュール
+```bash
+# 基本形式
+python -m reply_bot.post_reply INPUT_CSV [オプション]
+
+# 利用可能オプション
+--live-run                  # ドライランを無効化し、実際に投稿・いいねを実行
+--limit N                   # 処理するツイートの最大数
+--interval N                # 投稿間の待機時間（秒）
+--headless                  # ブラウザを非表示で起動
+
+# 実行例：5件まで実際に投稿、10秒間隔
+python -m reply_bot.post_reply output/processed_replies_20250107_120000.csv --live-run --limit 5 --interval 10 --headless
+```
+
+**`check_login_status.py`** - ログイン状態確認モジュール
+```bash
+# 基本形式
+python -m reply_bot.check_login_status [オプション]
+
+# 利用可能オプション
+--headless                  # ブラウザを非表示で起動
+
+# 実行例：ヘッドレスモードでログイン状態確認
+python -m reply_bot.check_login_status --headless
+```
+
 ### 7. 定期実行設定
-`cron`（Linux/macOS）やタスクスケジューラ（Windows）で定期的に実行するよう設定します。
+`cron`（Linux/macOS）やタスクスケジューラ（Windows）で定期的に実行するよう設定します。本番環境では**ヘッドレスモード**での実行を推奨します。
+
 ```cron
-# 毎時0分に main.py をライブモードで実行
-0 * * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --live-run >> /path/to/Twitter_reply/log/cron.log 2>&1
+# 毎時0分に main.py をライブモード + ヘッドレスモードで実行
+0 * * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --live-run --headless >> /path/to/Twitter_reply/log/cron.log 2>&1
+
+# より細かい制御が必要な場合の例（過去2時間のデータのみ処理）
+0 */2 * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --hours 2 --live-run --headless >> /path/to/Twitter_reply/log/cron.log 2>&1
 ```
 
 ## 出力ファイル

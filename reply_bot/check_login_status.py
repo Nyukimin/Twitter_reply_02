@@ -69,4 +69,8 @@ def check_login():
             logging.info("WebDriverを終了しました。")
 
 if __name__ == '__main__':
-    check_login() 
+    parser = argparse.ArgumentParser(description="Twitterのログイン状態を確認します。")
+    parser.add_argument('--headless', action='store_true', help='このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。')
+    args = parser.parse_args()
+    
+    check_login(headless=args.headless)

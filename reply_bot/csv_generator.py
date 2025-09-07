@@ -475,6 +475,11 @@ if __name__ == "__main__":
         default=None,
         help="何時間前までのリプライを収集するか。指定しない場合は制限なし。"
     )
+    parser.add_argument(
+        "--headless",
+        action='store_true',
+        help="このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。"
+    )
     args = parser.parse_args()
 
     # 出力パスが指定されていない場合、タイムスタンプ付きのパスを生成
@@ -489,10 +494,7 @@ if __name__ == "__main__":
     # このファイルが直接実行された場合のみ、driverをセットアップして終了する
     driver = None
     try:
-        # 引数でheadlessモードを制御できるようにする (例: --headless)
-        # ここでは簡単のため、configに合わせるか、固定値とします。
-        # ユーザーの記憶に基づき、デバッグ中はFalseを維持 [[memory:2213753]]
-        driver = setup_driver(headless=False) 
+        driver = setup_driver(headless=args.headless)
         if driver:
             main_process(
                 driver=driver,
