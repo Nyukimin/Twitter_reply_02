@@ -1,29 +1,35 @@
 import logging
 import time
+import argparse
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# このスクリプトは単体で実行されることを想定しているため、
-# 親ディレクトリのパスをシステムパスに追加する
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from reply_bot.utils import setup_driver
+# 通常のインポート - モジュールとして実行される場合
+try:
+    from .utils import setup_driver
+except ImportError:
+    # 直接実行される場合のフォールバック
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from reply_bot.utils import setup_driver
 
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def check_login():
+def check_login(headless: bool = False):
     """
     setup_driverを使用してブラウザを起動し、Twitterへのログイン状態を確認する。
+    
+    Args:
+        headless: ヘッドレスモードで実行するか
     """
     logging.info("ログイン状態の確認を開始します...")
     driver = None
     try:
-        # headless=Falseでブラウザの動作を目視確認 [[memory:2213753]]
-        driver = setup_driver(headless=False)
+        # headlessパラメータを引数として受け取る
+        driver = setup_driver(headless=headless)
         if not driver:
             logging.error("WebDriverのセットアップに失敗しました。")
             return
@@ -68,9 +74,13 @@ def check_login():
             driver.quit()
             logging.info("WebDriverを終了しました。")
 
-if __name__ == '__main__':
+def main():
+    """エントリーポイント"""
     parser = argparse.ArgumentParser(description="Twitterのログイン状態を確認します。")
     parser.add_argument('--headless', action='store_true', help='このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。')
     args = parser.parse_args()
     
     check_login(headless=args.headless)
+
+if __name__ == '__main__':
+    main()

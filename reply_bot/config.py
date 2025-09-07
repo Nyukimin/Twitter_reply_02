@@ -27,6 +27,8 @@ POST_INTERVAL_SECONDS = 7     # 投稿間の待機時間（秒）
 PRIORITY_REPLY_ENABLED = False  # 優先度付けを有効にするか (True/False)
 MAX_MY_THREAD_REPLIES = 5       # 自分のスレッドから取得する最大リプライ数
 MAX_OTHER_THREAD_REPLIES = 3    # 他人のスレッドから取得する最大リプライ数
+# プロファイル設定
+PROFILES_DIR = "./profiles"  # Chromeプロファイル保存ディレクトリ
 
 # タイムアウト設定の詳細説明:
 # - LOGIN_TIMEOUT_ENABLED: Trueにするとタイムアウト機能が有効になり、Falseにすると無効になります
@@ -100,3 +102,7 @@ LEGACY_COOKIE_SUPPORT = False            # Cookie認証のサポート（将来�
 5. 相手のリプライに性的なニュアンスが含まれている場合、困惑したり、恥ずかしがるような反応をしてください。決して喜んだり同意したりしないでください。
    （適切な返答の例：「えっ、何言ってるの…？❤️」「もう、冗談ばっかり…🩷」「そういうのは恥ずかしいよ…🩷」「心臓に悪いってば…！❤️」「そんなこと言われたら、どうしたらいいか分かんないよ…🩷」）
 """ 
+
+# プロファイル設定
+PROFILES_DIR = "./profiles"  # Chromeプロファイル保存ディレクトリ
+TWITTER_PROFILE_NAME = "twitter_main"  # 使用するTwitterプロファイル名

@@ -24,3 +24,7 @@ class ChromeLaunchError(ChromeProfileManagerError):
 class ProfileDeleteError(ChromeProfileManagerError):
     """プロファイル削除に失敗した場合の例外"""
     pass
+
+class ProcessKillError(ChromeProfileManagerError):
+    """既存プロセスの終了に失敗した場合の例外"""
+    pass

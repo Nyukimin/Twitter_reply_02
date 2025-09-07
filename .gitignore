@@ -22,3 +22,18 @@ reply_bot/replies.db
 # 個人用メモ / スクリプト
 TaskSchedullor.txt
 *.ps1
+
+# Chrome profiles
+profiles/
+
+# Serena MCP cache
+.serena/
+
+# Screenshots
+*.png
+*.jpg
+*.jpeg
+
+# Test files
+reply_bot/simple_test.py
+shared_modules/chrome_profile_manager/examples/

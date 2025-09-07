@@ -7,13 +7,16 @@ import shutil
 import json
 import time
 import logging
+import psutil
+import signal
+import platform
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from webdriver_manager.chrome import ChromeDriverManager
 
-from .exceptions import ProfileNotFoundError, ProfileCreationError, ChromeLaunchError
+from .exceptions import ProfileNotFoundError, ProfileCreationError, ChromeLaunchError, ProcessKillError
 
 
 class ProfiledChromeManager:
@@ -118,6 +121,12 @@ class ProfiledChromeManager:
             ChromeLaunchError: Chrome起動に失敗した場合
         """
         try:
+            # 既存の同一プロファイルのChromeプロセスを終了
+            self._kill_existing_chrome_processes(profile_path)
+            
+            # ロックファイルを事前にクリーンアップ
+            self._cleanup_profile_locks(profile_path)
+            
             chrome_options = self._build_chrome_options(profile_path, **options)
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
@@ -142,19 +151,54 @@ class ProfiledChromeManager:
         options = ChromeOptions()
         
         # プロファイル設定
-        options.add_argument(f"--user-data-dir={profile_path}")
+        # Windowsの権限問題対策: 絶対パスを使用
+        import os
+        absolute_profile_path = os.path.abspath(profile_path)
+        options.add_argument(f"--user-data-dir={absolute_profile_path}")
         options.add_argument("--profile-directory=Default")
+        
+        # Windows権限エラー対策
+        options.add_argument("--disable-features=LockProfileData")
+        options.add_argument("--disable-features=ProcessSingletonLock")
         
         # 基本ステルス設定
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        
+        # Windows専用: SingletonLockエラー対策
+        import platform
+        if platform.system() == 'Windows':
+            options.add_argument("--disable-single-click-autofill")
+            options.add_argument("--disable-gpu-sandbox")
+            options.add_argument("--disable-setuid-sandbox")
+            options.add_argument("--remote-debugging-port=0")  # ランダムポートを使用
         options.add_argument("--disable-blink-features=AutomationControlled")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option('useAutomationExtension', False)
         
+        # プロセス競合対策
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-plugins")
+        options.add_argument("--disable-web-security")
+        options.add_argument("--allow-running-insecure-content")
+        options.add_argument("--no-default-browser-check")
+        options.add_argument("--no-first-run")
+        options.add_argument("--disable-default-apps")
+        options.add_argument("--disable-popup-blocking")
+        options.add_argument("--disable-translate")
+        options.add_argument("--disable-background-timer-throttling")
+        options.add_argument("--disable-renderer-backgrounding")
+        options.add_argument("--disable-backgrounding-occluded-windows")
+        options.add_argument("--force-device-scale-factor=1")
+        
         # カスタムオプション適用
         if custom_options.get('headless', False):
-            options.add_argument("--headless")
+            # 新しいヘッドレスモードを使用
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--disable-software-rasterizer")
+            # window-sizeは下で設定するため、ここでは設定しない
         
         if 'window_size' in custom_options:
             if isinstance(custom_options['window_size'], (tuple, list)) and len(custom_options['window_size']) == 2:
@@ -268,3 +312,213 @@ class ProfiledChromeManager:
                 
         except Exception as e:
             self.logger.warning(f"デフォルト設定の作成に失敗: {e}")
+    
+    def _kill_existing_chrome_processes(self, profile_path: str, timeout: int = 10) -> None:
+        """同一プロファイルの既存Chromeプロセスを終了
+        
+        Args:
+            profile_path: プロファイルパス
+            timeout: プロセス終了待機タイムアウト（秒）
+            
+        Raises:
+            ProcessKillError: プロセス終了に失敗した場合
+        """
+        killed_processes = []
+        failed_processes = []
+        
+        try:
+            # 正規化されたプロファイルパスを取得
+            normalized_profile_path = str(Path(profile_path).resolve())
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+                try:
+                    proc_info = proc.info
+                    
+                    # Chromeプロセスかチェック
+                    if not proc_info['name'] or 'chrome' not in proc_info['name'].lower():
+                        continue
+                        
+                    # コマンドラインに同じプロファイルパスが含まれているかチェック
+                    cmdline = proc_info['cmdline']
+                    if not cmdline:
+                        continue
+                        
+                    cmdline_str = ' '.join(cmdline)
+                    if normalized_profile_path in cmdline_str or profile_path in cmdline_str:
+                        self.logger.info(f"同一プロファイルのChromeプロセスを検出: PID={proc.pid}")
+                        
+                        # プロセス終了を試行
+                        self._terminate_process_safely(proc, timeout)
+                        killed_processes.append(proc.pid)
+                        
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    # プロセスが既に終了済みまたはアクセス拒否の場合はスキップ
+                    continue
+                except Exception as e:
+                    self.logger.warning(f"プロセスチェック中のエラー: {e}")
+                    failed_processes.append(str(e))
+            
+            if killed_processes:
+                self.logger.info(f"既存Chromeプロセスを終了しました: PIDs={killed_processes}")
+                # プロセス終了後にロックファイルをクリーンアップ
+                self._cleanup_profile_locks(profile_path)
+                
+            if failed_processes:
+                self.logger.warning(f"一部プロセスの終了に失敗: {failed_processes}")
+                
+        except Exception as e:
+            self.logger.error(f"プロセス終了処理でエラー: {e}")
+            raise ProcessKillError(f"既存プロセスの終了に失敗: {e}")
+    
+    def _cleanup_profile_locks(self, profile_path: str) -> None:
+        """プロファイルのロックファイルをクリーンアップ
+        
+        Args:
+            profile_path: プロファイルパス
+        """
+        try:
+            import time
+            # プロセス終了後の安定化を待つ
+            time.sleep(1)
+            
+            profile_dir = Path(profile_path)
+            if not profile_dir.exists():
+                return
+            
+            # 削除対象のロックファイル（拡張版）
+            lock_files = [
+                "SingletonLock",
+                "SingletonCookie",
+                "SingletonSocket",
+                "lockfile",
+                "parent.lock",
+                "data_reduction_proxy_leveldb/LOCK",
+                "shared_proto_db/LOCK",
+                "optimization_guide_model_store/LOCK",
+            ]
+            
+            # ルートディレクトリのロックファイル削除
+            for lock_file in lock_files:
+                lock_path = profile_dir / lock_file
+                if lock_path.exists():
+                    try:
+                        # Windowsの場合、読み取り専用属性を解除
+                        if lock_path.is_file():
+                            import stat
+                            import os
+                            os.chmod(str(lock_path), stat.S_IWRITE)
+                        lock_path.unlink()
+                        self.logger.debug(f"ロックファイル削除: {lock_path}")
+                    except Exception as e:
+                        self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
+                        
+            # Defaultディレクトリ内のロックファイルもチェック
+            default_dir = profile_dir / "Default"
+            if default_dir.exists():
+                for lock_file in lock_files:
+                    lock_path = default_dir / lock_file
+                    if lock_path.exists():
+                        try:
+                            # Windowsの場合、読み取り専用属性を解除
+                            if lock_path.is_file():
+                                import stat
+                                import os
+                                os.chmod(str(lock_path), stat.S_IWRITE)
+                            lock_path.unlink()
+                            self.logger.debug(f"ロックファイル削除: {lock_path}")
+                        except Exception as e:
+                            self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
+                            
+        except Exception as e:
+            self.logger.warning(f"ロックファイルクリーンアップエラー: {e}")
+    
+    def _terminate_process_safely(self, process: psutil.Process, timeout: int = 10) -> None:
+        """プロセスを安全に終了
+        
+        Args:
+            process: 終了対象のプロセス
+            timeout: 終了待機タイムアウト（秒）
+        """
+        try:
+            # まず通常終了を試行
+            if platform.system() == "Windows":
+                process.terminate()
+            else:
+                process.send_signal(signal.SIGTERM)
+            
+            # プロセス終了を待機
+            try:
+                process.wait(timeout=timeout//2)
+                self.logger.debug(f"プロセス {process.pid} が正常終了しました")
+                return
+            except psutil.TimeoutExpired:
+                self.logger.warning(f"プロセス {process.pid} の正常終了がタイムアウト、強制終了します")
+            
+            # 強制終了を試行
+            if platform.system() == "Windows":
+                process.kill()
+            else:
+                process.send_signal(signal.SIGKILL)
+                
+            # 強制終了の完了を待機
+            try:
+                process.wait(timeout=timeout//2)
+                self.logger.info(f"プロセス {process.pid} を強制終了しました")
+            except psutil.TimeoutExpired:
+                self.logger.error(f"プロセス {process.pid} の強制終了もタイムアウトしました")
+                
+        except psutil.NoSuchProcess:
+            # プロセスが既に存在しない場合は正常
+            self.logger.debug(f"プロセス {process.pid} は既に終了済みです")
+        except Exception as e:
+            self.logger.error(f"プロセス {process.pid} の終了中にエラー: {e}")
+            raise
+    
+    def get_running_chrome_processes(self, profile_path: str = None) -> List[Dict]:
+        """実行中のChromeプロセス情報を取得
+        
+        Args:
+            profile_path: 特定のプロファイルのみを対象にする場合のパス
+            
+        Returns:
+            List[Dict]: プロセス情報のリスト
+        """
+        chrome_processes = []
+        
+        try:
+            normalized_profile_path = None
+            if profile_path:
+                normalized_profile_path = str(Path(profile_path).resolve())
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time', 'memory_info']):
+                try:
+                    proc_info = proc.info
+                    
+                    # Chromeプロセスかチェック
+                    if not proc_info['name'] or 'chrome' not in proc_info['name'].lower():
+                        continue
+                    
+                    # 特定プロファイルのフィルタリング
+                    if profile_path:
+                        cmdline = proc_info['cmdline']
+                        if not cmdline:
+                            continue
+                        cmdline_str = ' '.join(cmdline)
+                        if normalized_profile_path not in cmdline_str and profile_path not in cmdline_str:
+                            continue
+                    
+                    chrome_processes.append({
+                        'pid': proc_info['pid'],
+                        'name': proc_info['name'],
+                        'cmdline': proc_info['cmdline'],
+                        'create_time': proc_info['create_time'],
+                        'memory_mb': round(proc_info['memory_info'].rss / 1024 / 1024, 1) if proc_info.get('memory_info') else None
+                    })
+                    
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                    
+        except Exception as e:
+            self.logger.error(f"プロセス情報取得エラー: {e}")
+            
+        return chrome_processes
