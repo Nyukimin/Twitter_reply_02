@@ -92,16 +92,21 @@ pip install -r reply_bot/requirements.txt
 `reply_bot/config.py` に、Xのアカウント情報やGemini APIキーなどを設定します。
 
 #### 必須設定項目
+`reply_bot/config.py`ファイルに以下の情報を設定してください：
+
 ```python
-# reply_bot/config.py の例
-TARGET_USER = "nyukimi_AI"        # あなたのXアカウント名
-LOGIN_URL = "https://x.com/login"
-USERNAME = "your_username"        # Xのユーザー名またはメールアドレス
-PASSWORD = "your_password"        # Xのパスワード
-GEMINI_API_KEY = "your_api_key"   # Google Gemini APIキー
+# reply_bot/config.py の設定例
+TARGET_USER   = "nyukimi_AI"           # あなたのXアカウント名（@は不要）
+LOGIN_URL     = "https://x.com/login"  # ログインURL（通常変更不要）
+USERNAME      = "your_username"        # Xのログインに使用するユーザー名またはメールアドレス
+PASSWORD      = "your_password"        # Xのログインに使用するパスワード
+GEMINI_API_KEY= "your_gemini_api_key"  # Google Gemini APIキー
 
 # データベース設定
-DB_PATH = "replies.db"
+DB_FILE       = "replies.db"           # SQLiteデータベースのファイル名
+
+# プロファイル設定
+PROFILES_DIR  = "./profiles"           # Chromeプロファイル保存ディレクトリ
 
 # 多言語対応の感謝フレーズ
 THANK_YOU_PHRASES = {
@@ -110,6 +115,17 @@ THANK_YOU_PHRASES = {
     "ja": ["ありがとう❤", "感謝です❤", "ありがとうございます❤"],
     # ... 他の言語も同様に複数パターンを定義 ...
 }
+```
+
+**⚠️ 重要**: USERNAME と PASSWORD は必須項目です。初回実行時にこれらの情報を使ってTwitterにログインし、以降はChromeプロファイルで自動ログインされます。
+
+**具体的な設定例**:
+```python
+# 実際の設定例
+TARGET_USER   = "maya19960330"          # あなたのXアカウント名
+USERNAME      = "maya@example.com"      # ログインに使うメールアドレス
+PASSWORD      = "your_strong_password"  # Xのパスワード
+GEMINI_API_KEY= "AIzaSyA7aSuSGwd..."    # Gemini APIキー（詳細は下記参照）
 ```
 
 #### Gemini API キーの取得方法
@@ -360,16 +376,40 @@ cd Twitter_reply_02
 
 ### ステップ3: 設定ファイルの作成
 ```bash
-# config.pyを作成して、必要な情報を入力
-cp reply_bot/config.py.template reply_bot/config.py
-# エディタで config.py を編集し、アカウント情報やAPIキーを設定
+# config.pyを編集して、必要な情報を入力
+# Windows の場合
+notepad reply_bot/config.py
+
+# Linux/macOS の場合
+nano reply_bot/config.py
+# または
+vim reply_bot/config.py
 ```
 
-### ステップ4: 初回Cookieの取得
-```bash
-# 手動ログインでCookieを保存
-python -m reply_bot.get_cookie
+**設定必須項目チェックリスト**:
+- [ ] `TARGET_USER`: あなたのXアカウント名（@なし）
+- [ ] `USERNAME`: ログインに使うユーザー名またはメールアドレス
+- [ ] `PASSWORD`: Xのパスワード
+- [ ] `GEMINI_API_KEY`: Google Gemini APIキー
+
+**設定例**:
+```python
+TARGET_USER   = "your_account_name"
+USERNAME      = "your_email@example.com"    # またはユーザー名
+PASSWORD      = "your_twitter_password"
+GEMINI_API_KEY= "AIzaSyA7aSuSGwd..."        # Gemini APIキー
 ```
+
+### ステップ4: 初回ログインとプロファイル作成
+```bash
+# 手動ログインでプロファイルを作成
+python -m reply_bot.check_login_status
+```
+このコマンドを実行すると：
+1. Chromeが起動してTwitterのログイン画面が表示されます
+2. 手動でTwitterアカウントにログイン
+3. ログイン情報がChromeプロファイル（`profiles/twitter_main/`）に自動保存されます
+4. 以降の実行では自動的にログイン状態が維持されます
 
 ### ステップ5: データベースの初期化
 ```bash
