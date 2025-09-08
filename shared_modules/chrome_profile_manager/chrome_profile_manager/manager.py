@@ -10,6 +10,9 @@ import logging
 import psutil
 import signal
 import platform
+import tempfile
+import uuid
+import re
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -35,24 +38,51 @@ class ProfiledChromeManager:
         self, 
         profile_name: str,
         force_recreate: bool = False,
+        fallback_to_temp: bool = True,
+        max_retries: int = 3,
         **chrome_options
     ) -> webdriver.Chrome:
-        """プロファイル作成→Chrome起動を一括実行
+        """プロファイル作成→Chrome起動を一括実行（指数バックオフ付きリトライ機能付き）
         
         Args:
             profile_name: プロファイル名
             force_recreate: プロファイルを強制再作成するか
+            fallback_to_temp: メインプロファイル失敗時に一時プロファイルにフォールバックするか
+            max_retries: 最大リトライ回数
             **chrome_options: Chrome起動オプション
             
         Returns:
             webdriver.Chrome: Chrome WebDriverインスタンス
         """
-        try:
-            profile_path = self.create_profile(profile_name, force_recreate)
-            return self.launch_with_profile(profile_path, **chrome_options)
-        except Exception as e:
-            self.logger.error(f"プロファイル作成・起動エラー: {e}")
-            raise ChromeLaunchError(f"プロファイル '{profile_name}' の作成・起動に失敗: {e}")
+        last_error = None
+        
+        # まず通常のプロファイルで試行
+        for attempt in range(max_retries):
+            try:
+                profile_path = self.create_profile(profile_name, force_recreate)
+                return self._launch_with_retries(profile_path, max_retries=max_retries, **chrome_options)
+            except Exception as e:
+                last_error = e
+                self.logger.warning(f"プロファイル '{profile_name}' での起動試行 {attempt + 1}/{max_retries} が失敗: {e}")
+                
+                if attempt < max_retries - 1:
+                    backoff_time = 0.5 * (2 ** attempt)
+                    self.logger.info(f"リトライまで {backoff_time} 秒待機...")
+                    time.sleep(backoff_time)
+        
+        # 通常プロファイルで失敗した場合、一時プロファイルで試行
+        if fallback_to_temp:
+            self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、新しい一時プロファイルを作成します。")
+            try:
+                temp_profile_path = self._create_unique_temp_profile(profile_name)
+                return self._launch_with_retries(temp_profile_path, max_retries=max_retries, **chrome_options)
+            except Exception as temp_error:
+                self.logger.error(f"一時プロファイルでの起動も失敗: {temp_error}")
+                raise ChromeLaunchError(
+                    f"プロファイル '{profile_name}' および一時プロファイルでの起動に失敗。メイン: {last_error}、一時: {temp_error}"
+                )
+        
+        raise ChromeLaunchError(f"プロファイル '{profile_name}' の作成・起動に失敗: {last_error}")
     
     def launch_existing(self, profile_name: str, **chrome_options) -> webdriver.Chrome:
         """既存プロファイルでChrome起動
@@ -103,12 +133,146 @@ class ProfiledChromeManager:
             self.logger.error(f"プロファイル作成エラー: {e}")
             raise ProfileCreationError(f"プロファイル '{profile_name}' の作成に失敗: {e}")
     
+    def _launch_with_retries(
+        self, 
+        profile_path: str, 
+        max_retries: int = 3,
+        **options
+    ) -> webdriver.Chrome:
+        """指数バックオフ付きリトライでChromeを起動
+        
+        Args:
+            profile_path: プロファイルパス
+            max_retries: 最大リトライ回数
+            **options: Chrome起動オプション
+            
+        Returns:
+            webdriver.Chrome: Chrome WebDriverインスタンス
+            
+        Raises:
+            ChromeLaunchError: Chrome起動に失敗した場合
+        """
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                # 既存の同一プロファイルのChromeプロセスを終了
+                self._kill_existing_chrome_processes(profile_path)
+                
+                # ロックファイルを事前にクリーンアップ
+                self._cleanup_profile_locks(profile_path)
+                
+                # 少し待機してからChrome起動
+                if attempt > 0:
+                    time.sleep(0.2)
+                
+                chrome_options = self._build_chrome_options(profile_path, **options)
+                service = Service(ChromeDriverManager().install())
+                
+                # 実際のuser-data-dirをログ出力（デバッグ用）
+                absolute_profile_path = os.path.abspath(profile_path)
+                self.logger.info(f"[Chrome] user-data-dir = {absolute_profile_path}")
+                
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                
+                self.logger.info(f"Chrome起動成功: プロファイル={profile_path}")
+                return driver
+                
+            except Exception as e:
+                last_error = e
+                self.logger.error(f"Chrome起動エラー（試行 {attempt + 1}/{max_retries}）: {e}")
+                
+                if attempt < max_retries - 1:
+                    backoff_time = 0.5 * (2 ** attempt)
+                    self.logger.info(f"リトライまで {backoff_time} 秒待機...")
+                    time.sleep(backoff_time)
+        
+        raise ChromeLaunchError(f"Chrome起動に失敗（{max_retries}回試行）: {last_error}")
+    
+    def _create_unique_temp_profile(self, base_profile_name: str) -> str:
+        """ユニークな一時プロファイルを作成
+        
+        Args:
+            base_profile_name: ベースプロファイル名
+            
+        Returns:
+            str: 作成された一時プロファイルのパス
+            
+        Raises:
+            ProfileCreationError: プロファイル作成に失敗した場合
+        """
+        try:
+            # ユニークな一時プロファイル名を生成
+            timestamp = int(time.time())
+            pid = os.getpid()
+            unique_id = str(uuid.uuid4())[:8]
+            temp_name = f"{base_profile_name}_temp_{timestamp}_{pid}_{unique_id}"
+            
+            # 一時プロファイル用ディレクトリを作成
+            temp_base_dir = self.base_profiles_dir / "_temp"
+            temp_base_dir.mkdir(exist_ok=True)
+            
+            temp_profile_path = temp_base_dir / temp_name
+            temp_profile_path.mkdir(parents=True, exist_ok=True)
+            
+            # ベースプロファイルが存在する場合、必要最小限をコピー
+            base_profile_path = self.base_profiles_dir / base_profile_name
+            if base_profile_path.exists():
+                self._copy_essential_profile_data(base_profile_path, temp_profile_path)
+            else:
+                # ベースプロファイルがない場合はデフォルト設定を作成
+                self._setup_default_preferences(temp_profile_path)
+            
+            self.logger.info(f"プロファイル作成完了: {temp_profile_path}")
+            return str(temp_profile_path)
+            
+        except Exception as e:
+            self.logger.error(f"一時プロファイル作成エラー: {e}")
+            raise ProfileCreationError(f"一時プロファイル '{temp_name}' の作成に失敗: {e}")
+    
+    def _copy_essential_profile_data(self, source_path: Path, dest_path: Path) -> None:
+        """プロファイルの必要最小限のデータをコピー
+        
+        Args:
+            source_path: コピー元プロファイルパス
+            dest_path: コピー先プロファイルパス
+        """
+        try:
+            # コピーする重要ファイル/ディレクトリ（軽量化のためキャッシュ類は除外）
+            essential_items = [
+                "Default/Preferences",
+                "Default/Secure Preferences",
+                "Default/Local State",
+                "Default/Cookies",
+                "Default/Login Data",
+                "Default/Web Data",
+                "First Run",
+                "Local State"
+            ]
+            
+            for item in essential_items:
+                source_item = source_path / item
+                dest_item = dest_path / item
+                
+                if source_item.exists():
+                    dest_item.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    if source_item.is_file():
+                        shutil.copy2(source_item, dest_item)
+                    elif source_item.is_dir():
+                        shutil.copytree(source_item, dest_item, dirs_exist_ok=True)
+                    
+                    self.logger.debug(f"プロファイルデータをコピー: {item}")
+                    
+        except Exception as e:
+            self.logger.warning(f"プロファイルデータのコピー中にエラー: {e}")
+    
     def launch_with_profile(
         self, 
         profile_path: str, 
         **options
     ) -> webdriver.Chrome:
-        """指定プロファイルでChromeを起動
+        """指定プロファイルでChromeを起動（後方互換性のため）
         
         Args:
             profile_path: プロファイルパス
@@ -120,23 +284,7 @@ class ProfiledChromeManager:
         Raises:
             ChromeLaunchError: Chrome起動に失敗した場合
         """
-        try:
-            # 既存の同一プロファイルのChromeプロセスを終了
-            self._kill_existing_chrome_processes(profile_path)
-            
-            # ロックファイルを事前にクリーンアップ
-            self._cleanup_profile_locks(profile_path)
-            
-            chrome_options = self._build_chrome_options(profile_path, **options)
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            self.logger.info(f"Chrome起動成功: プロファイル={profile_path}")
-            return driver
-            
-        except Exception as e:
-            self.logger.error(f"Chrome起動エラー: {e}")
-            raise ChromeLaunchError(f"Chrome起動に失敗: {e}")
+        return self._launch_with_retries(profile_path, max_retries=1, **options)
     
     def _build_chrome_options(self, profile_path: str, **custom_options) -> ChromeOptions:
         """ChromeOptionsを動的に構築
@@ -522,3 +670,89 @@ class ProfiledChromeManager:
             self.logger.error(f"プロセス情報取得エラー: {e}")
             
         return chrome_processes
+    
+    def cleanup_temp_profiles(self, older_than_hours: int = 24) -> int:
+        """古い一時プロファイルをクリーンアップ
+        
+        Args:
+            older_than_hours: 何時間前より古いプロファイルを削除するか
+            
+        Returns:
+            int: 削除されたプロファイル数
+        """
+        deleted_count = 0
+        
+        try:
+            temp_dir = self.base_profiles_dir / "_temp"
+            if not temp_dir.exists():
+                return 0
+            
+            cutoff_time = time.time() - (older_than_hours * 3600)
+            
+            for temp_profile in temp_dir.iterdir():
+                if temp_profile.is_dir() and temp_profile.name.startswith(("twitter_main_temp_", "_temp_")):
+                    try:
+                        # プロファイルの作成時刻をチェック
+                        profile_ctime = temp_profile.stat().st_ctime
+                        
+                        if profile_ctime < cutoff_time:
+                            # 使用中でないかチェック
+                            running_processes = self.get_running_chrome_processes(str(temp_profile))
+                            if not running_processes:
+                                shutil.rmtree(temp_profile)
+                                deleted_count += 1
+                                self.logger.info(f"古い一時プロファイルを削除: {temp_profile.name}")
+                            else:
+                                self.logger.info(f"使用中のため削除スキップ: {temp_profile.name}")
+                    except Exception as e:
+                        self.logger.warning(f"一時プロファイル削除エラー {temp_profile.name}: {e}")
+            
+            self.logger.info(f"一時プロファイルクリーンアップ完了: {deleted_count}個削除")
+            return deleted_count
+            
+        except Exception as e:
+            self.logger.error(f"一時プロファイルクリーンアップエラー: {e}")
+            return 0
+    
+    def kill_chrome_using_profile(self, profile_path: str, timeout: int = 10) -> list[int]:
+        """特定プロファイルを使用しているChromeプロセスのみを終了
+        
+        Args:
+            profile_path: 対象プロファイルパス
+            timeout: プロセス終了タイムアウト
+            
+        Returns:
+            List[int]: 終了したプロセスIDのリスト
+        """
+        killed_pids = []
+        
+        try:
+            # 正規化されたプロファイルパスを取得
+            normalized_profile_path = str(Path(profile_path).resolve())
+            pattern = re.compile(re.escape(normalized_profile_path), re.IGNORECASE)
+            
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    proc_info = proc.info
+                    name = (proc_info['name'] or "").lower()
+                    
+                    if name in ("chrome.exe", "msedge.exe", "chromedriver.exe"):
+                        cmdline = " ".join(proc_info.get("cmdline") or [])
+                        if pattern.search(cmdline):
+                            self._terminate_process_safely(proc, timeout)
+                            killed_pids.append(proc.pid)
+                            
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+                except Exception as e:
+                    self.logger.warning(f"プロセス終了中のエラー: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"特定プロファイルのChrome終了エラー: {e}")
+            
+        if killed_pids:
+            self.logger.info(f"特定プロファイルのChromeプロセスを終了: PIDs={killed_pids}")
+            # プロセス終了後にロックファイルをクリーンアップ
+            self._cleanup_profile_locks(profile_path)
+            
+        return killed_pids
