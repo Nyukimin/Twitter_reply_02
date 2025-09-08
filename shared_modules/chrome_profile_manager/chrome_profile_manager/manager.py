@@ -70,16 +70,25 @@ class ProfiledChromeManager:
                     self.logger.info(f"リトライまで {backoff_time} 秒待機...")
                     time.sleep(backoff_time)
         
-        # 通常プロファイルで失敗した場合、一時プロファイルで試行
+        # 通常プロファイルで失敗した場合、プロファイルを削除して再作成
         if fallback_to_temp:
-            self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、新しい一時プロファイルを作成します。")
+            self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、プロファイルを削除して再作成します。")
             try:
-                temp_profile_path = self._create_unique_temp_profile(profile_name)
-                return self._launch_with_retries(temp_profile_path, max_retries=max_retries, **chrome_options)
-            except Exception as temp_error:
-                self.logger.error(f"一時プロファイルでの起動も失敗: {temp_error}")
+                # 既存プロファイルを完全削除
+                old_profile_path = self.base_profiles_dir / profile_name
+                if old_profile_path.exists():
+                    import shutil
+                    shutil.rmtree(old_profile_path)
+                    self.logger.info(f"古いプロファイルを削除しました: {old_profile_path}")
+                
+                # 新しいプロファイルを作成
+                new_profile_path = self.create_profile(profile_name, force_recreate=True)
+                return self._launch_with_retries(new_profile_path, max_retries=1, **chrome_options)
+                
+            except Exception as recreate_error:
+                self.logger.error(f"プロファイル再作成での起動も失敗: {recreate_error}")
                 raise ChromeLaunchError(
-                    f"プロファイル '{profile_name}' および一時プロファイルでの起動に失敗。メイン: {last_error}、一時: {temp_error}"
+                    f"プロファイル '{profile_name}' の削除・再作成に失敗。メイン: {last_error}、再作成: {recreate_error}"
                 )
         
         raise ChromeLaunchError(f"プロファイル '{profile_name}' の作成・起動に失敗: {last_error}")
@@ -478,16 +487,34 @@ class ProfiledChromeManager:
             # 正規化されたプロファイルパスを取得
             normalized_profile_path = str(Path(profile_path).resolve())
             
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            # より安全なプロセス検索（権限エラー対策）
+            try:
+                processes = list(psutil.process_iter(['pid', 'name']))
+            except Exception as e:
+                self.logger.warning(f"プロセス一覧取得でエラー: {e}")
+                # プロセス取得に失敗した場合も、ロックファイル削除は実行
+                self._cleanup_profile_locks(profile_path)
+                return
+            
+            for proc in processes:
                 try:
                     proc_info = proc.info
                     
                     # Chromeプロセスかチェック
-                    if not proc_info['name'] or 'chrome' not in proc_info['name'].lower():
+                    if not proc_info.get('name') or 'chrome' not in proc_info['name'].lower():
+                        continue
+                    
+                    # cmdlineの取得を安全に行う
+                    try:
+                        cmdline = proc.cmdline()
+                    except (psutil.AccessDenied, psutil.NoSuchProcess, PermissionError):
+                        # 権限がない場合はスキップ（システムプロセスなど）
+                        continue
+                    except Exception as e:
+                        # その他の例外もスキップ
+                        self.logger.debug(f"cmdline取得エラー（PID {proc.pid}）: {e}")
                         continue
                         
-                    # コマンドラインに同じプロファイルパスが含まれているかチェック
-                    cmdline = proc_info['cmdline']
                     if not cmdline:
                         continue
                         
@@ -496,27 +523,38 @@ class ProfiledChromeManager:
                         self.logger.info(f"同一プロファイルのChromeプロセスを検出: PID={proc.pid}")
                         
                         # プロセス終了を試行
-                        self._terminate_process_safely(proc, timeout)
-                        killed_processes.append(proc.pid)
+                        try:
+                            self._terminate_process_safely(proc, timeout)
+                            killed_processes.append(proc.pid)
+                        except Exception as term_error:
+                            self.logger.warning(f"プロセス{proc.pid}終了失敗: {term_error}")
+                            failed_processes.append(proc.pid)
                         
                 except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     # プロセスが既に終了済みまたはアクセス拒否の場合はスキップ
                     continue
                 except Exception as e:
-                    self.logger.warning(f"プロセスチェック中のエラー: {e}")
-                    failed_processes.append(str(e))
+                    self.logger.debug(f"プロセスチェック中のエラー: {e}")
+                    continue
             
             if killed_processes:
                 self.logger.info(f"既存Chromeプロセスを終了しました: PIDs={killed_processes}")
-                # プロセス終了後にロックファイルをクリーンアップ
-                self._cleanup_profile_locks(profile_path)
                 
             if failed_processes:
-                self.logger.warning(f"一部プロセスの終了に失敗: {failed_processes}")
+                self.logger.warning(f"一部プロセスの終了に失敗: PIDs={failed_processes}")
+                
+            # プロセス終了の成功/失敗に関わらず、ロックファイルをクリーンアップ
+            self._cleanup_profile_locks(profile_path)
                 
         except Exception as e:
             self.logger.error(f"プロセス終了処理でエラー: {e}")
-            raise ProcessKillError(f"既存プロセスの終了に失敗: {e}")
+            # エラーが発生してもロックファイル削除は試行
+            try:
+                self._cleanup_profile_locks(profile_path)
+            except Exception as cleanup_error:
+                self.logger.error(f"ロックファイル削除もエラー: {cleanup_error}")
+            # 致命的でない限り例外は投げない（リトライループを防ぐ）
+            self.logger.warning("プロセス終了に失敗しましたが、処理を続行します")
     
     def _cleanup_profile_locks(self, profile_path: str) -> None:
         """プロファイルのロックファイルをクリーンアップ
