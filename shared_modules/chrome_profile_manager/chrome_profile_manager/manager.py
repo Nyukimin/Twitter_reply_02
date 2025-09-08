@@ -33,6 +33,8 @@ class ProfiledChromeManager:
         self.base_profiles_dir = Path(base_profiles_dir)
         self.base_profiles_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
+        # ChromeDriverのパスをキャッシュして再利用
+        self._driver_path = None
         
     def create_and_launch(
         self, 
@@ -165,10 +167,44 @@ class ProfiledChromeManager:
         
         for attempt in range(max_retries):
             try:
-                # 既存の同一プロファイルのChromeプロセスを終了
+                # より強力なクリーンアップ処理
+                # プロファイル特定のChromeプロセスのみを終了（改善版）
+                # 注意: 全Chromeプロセスを終了するのではなく、特定プロファイルのみ対象
+                import platform
+                
+                # 対象プロファイルを使用しているプロセスを特定して終了
+                try:
+                    killed_pids = self.kill_chrome_using_profile(profile_path, timeout=5)
+                    if killed_pids:
+                        self.logger.info(f"プロファイル使用中のChromeプロセスを終了: PIDs={killed_pids}")
+                        time.sleep(1)  # プロセス終了を待つ
+                except Exception as e:
+                    self.logger.warning(f"プロファイル特定のプロセス終了でエラー: {e}")
+                
+                # 追加のクリーンアップ（従来の処理も保持）
                 self._kill_existing_chrome_processes(profile_path)
                 
-                # ロックファイルを事前にクリーンアップ
+                # 3. プロファイルディレクトリ全体のロックファイルを強制削除
+                profile_dir = Path(profile_path)
+                if profile_dir.exists():
+                    # より包括的なロックファイル削除
+                    for pattern in ['Singleton*', '*.lock', 'lockfile*', 'parent.lock', '*/LOCK']:
+                        for lock_file in profile_dir.glob(pattern):
+                            try:
+                                if lock_file.is_file():
+                                    lock_file.unlink()
+                                    self.logger.debug(f"ロックファイル削除: {lock_file}")
+                            except Exception:
+                                pass
+                        for lock_file in profile_dir.glob(f"**/{pattern}"):
+                            try:
+                                if lock_file.is_file():
+                                    lock_file.unlink()
+                                    self.logger.debug(f"ロックファイル削除: {lock_file}")
+                            except Exception:
+                                pass
+                
+                # 4. 通常のロックファイルクリーンアップも実行
                 self._cleanup_profile_locks(profile_path)
                 
                 # 少し待機してからChrome起動
@@ -176,11 +212,33 @@ class ProfiledChromeManager:
                     time.sleep(0.2)
                 
                 chrome_options = self._build_chrome_options(profile_path, **options)
-                service = Service(ChromeDriverManager().install())
+                # ChromeDriverのパスを取得（キャッシュ利用）
+                if not self._driver_path:
+                    self.logger.info("ChromeDriverを初回インストール中...")
+                    # ChromeDriverManagerのインストール前に再度クリーンアップ
+                    # (ChromeDriverManagerがChromeを起動する可能性があるため)
+                    self._driver_path = ChromeDriverManager().install()
+                    self.logger.info(f"ChromeDriverパス: {self._driver_path}")
+                    # ChromeDriver取得後に再度プロファイル特定のクリーンアップ
+                    try:
+                        killed_pids = self.kill_chrome_using_profile(profile_path, timeout=2)
+                        if killed_pids:
+                            self.logger.info(f"ChromeDriver後のクリーンアップ: PIDs={killed_pids}")
+                            time.sleep(0.5)
+                    except Exception:
+                        pass
+                
+                service = Service(self._driver_path)
                 
                 # 実際のuser-data-dirをログ出力（デバッグ用）
                 absolute_profile_path = os.path.abspath(profile_path)
                 self.logger.info(f"[Chrome] user-data-dir = {absolute_profile_path}")
+                
+                # 最終的なプロファイルロック確認
+                self._cleanup_profile_locks(profile_path)
+                
+                # WebDriver初期化直前に短い待機
+                time.sleep(0.3)
                 
                 driver = webdriver.Chrome(service=service, options=chrome_options)
                 
