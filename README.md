@@ -90,22 +90,83 @@ pip install -r reply_bot/requirements.txt
 
 ### 3. `config.py` の設定
 `reply_bot/config.py` に、Xのアカウント情報やGemini APIキーなどを設定します。
+
+#### 必須設定項目
 ```python
 # reply_bot/config.py の例
-TARGET_USER = "nyukimi_AI"
+TARGET_USER = "nyukimi_AI"        # あなたのXアカウント名
 LOGIN_URL = "https://x.com/login"
-USERNAME = "..."
-PASSWORD = "..."
-GEMINI_API_KEY = "..."
+USERNAME = "your_username"        # Xのユーザー名またはメールアドレス
+PASSWORD = "your_password"        # Xのパスワード
+GEMINI_API_KEY = "your_api_key"   # Google Gemini APIキー
+
+# データベース設定
 DB_PATH = "replies.db"
 
 # 多言語対応の感謝フレーズ
 THANK_YOU_PHRASES = {
     "en": ["thanks❤", "Thank you so much!❤", "I appreciate it!❤", "Thanks a lot!❤"],
     "es": ["Gracias❤", "¡Muchas gracias!❤", "Te lo agradezco❤", "¡Mil gracias!❤"],
+    "ja": ["ありがとう❤", "感謝です❤", "ありがとうございます❤"],
     # ... 他の言語も同様に複数パターンを定義 ...
 }
 ```
+
+#### Gemini API キーの取得方法
+1. [Google AI Studio](https://makersuite.google.com/app/apikey)にアクセス
+2. 「Create API Key」をクリック
+3. 生成されたAPIキーを`GEMINI_API_KEY`に設定
+
+### 3.5. システム要件とトラブルシューティング
+
+#### Chrome関連のトラブルシューティング
+システムが`SessionNotCreatedException`や`user data directory is already in use`エラーを出す場合、以下の手順で解決します：
+
+**Windows環境での対処法：**
+```powershell
+# 1. PowerShellを管理者権限で開き、残骸プロセスを停止
+taskkill /f /im chrome.exe /im msedge.exe /im chromedriver.exe
+
+# 2. プロファイルディレクトリのロックファイルを削除
+del "C:\GenerativeAI\Twitter_reply_02\profiles\twitter_main\Singleton*"
+del "C:\GenerativeAI\Twitter_reply_02\profiles\twitter_main_*\Singleton*"
+```
+
+**Linux/macOS環境での対処法：**
+```bash
+# 残骸プロセスを停止
+pkill -f chrome
+pkill -f chromedriver
+
+# ロックファイルを削除
+rm -f ./profiles/*/Singleton*
+```
+
+#### Chrome設定の最適化
+Chromeの「バックグラウンドで実行」を無効化することを推奨します：
+1. Chromeを手動で開く
+2. 設定 → 詳細設定 → システム
+3. 「Google Chrome を閉じた際にバックグラウンド アプリの処理を続行する」を**オフ**
+
+#### 環境変数の設定
+システムの安定性を向上させるため、以下の環境変数を設定してください：
+
+**Windows（コマンドプロンプト）：**
+```cmd
+set DISPLAY=:0
+set CHROME_NO_SANDBOX=1
+```
+
+**Linux/macOS：**
+```bash
+export DISPLAY=:0
+export CHROME_NO_SANDBOX=1
+```
+
+#### セキュリティソフトの除外設定
+使用しているウイルス対策ソフトで、以下のディレクトリを監視対象外に設定してください：
+- `C:\GenerativeAI\Twitter_reply_02\profiles\` (プロファイルディレクトリ)
+- `%LOCALAPPDATA%\Temp\` (一時ファイル)
 
 ### 4. Cookieの取得と保存
 初回実行時のみ、以下のコマンドで手動ログインし、Cookieを保存します。
@@ -239,13 +300,150 @@ python -m reply_bot.check_login_status --headless
 ### 7. 定期実行設定
 `cron`（Linux/macOS）やタスクスケジューラ（Windows）で定期的に実行するよう設定します。本番環境では**ヘッドレスモード**での実行を推奨します。
 
-```cron
+#### Linux/macOS (cron)
+```bash
+# crontabを編集
+crontab -e
+
 # 毎時0分に main.py をライブモード + ヘッドレスモードで実行
-0 * * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --live-run --headless >> /path/to/Twitter_reply/log/cron.log 2>&1
+0 * * * * cd /path/to/Twitter_reply_02 && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --live-run --headless >> /path/to/Twitter_reply_02/log/cron.log 2>&1
 
 # より細かい制御が必要な場合の例（過去2時間のデータのみ処理）
-0 */2 * * * cd /path/to/Twitter_reply && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --hours 2 --live-run --headless >> /path/to/Twitter_reply/log/cron.log 2>&1
+0 */2 * * * cd /path/to/Twitter_reply_02 && /path/to/conda/envs/TwitterReplyEnv/bin/python -m reply_bot.main --hours 2 --live-run --headless >> /path/to/Twitter_reply_02/log/cron.log 2>&1
+```
+
+#### Windows (タスクスケジューラ)
+1. `タスクスケジューラ`を開く
+2. `基本タスクの作成`を選択
+3. 以下の設定を入力：
+   - **名前**: Twitter Reply Bot
+   - **トリガー**: 毎日、1時間ごと
+   - **操作**: プログラムの開始
+   - **プログラム**: `C:\path\to\conda\envs\TwitterReplyEnv\python.exe`
+   - **引数**: `-m reply_bot.main --live-run --headless`
+   - **開始**: `C:\GenerativeAI\Twitter_reply_02`
+
+#### Windows (バッチファイルを使用)
+`run_twitter_bot.bat`を作成：
+```batch
+@echo off
+cd /d "C:\GenerativeAI\Twitter_reply_02"
+call conda activate TwitterReplyEnv
+python -m reply_bot.main --live-run --headless >> log\cron.log 2>&1
 ```
 
 ## 出力ファイル
 `/output` フォルダに、処理結果のCSVファイル (`replies_YYYYMMDD_HHMMSS.csv`) が生成されます。このファイルには、収集したツイート、生成した返信、AIの思考プロセス、投稿結果などがすべて記録されます。
+
+---
+
+## 完全セットアップガイド（初回設定）
+
+### ステップ1: Conda環境の準備
+```bash
+# 1. Conda環境の作成
+conda create -n TwitterReplyEnv python=3.9
+
+# 2. 環境のアクティベート
+conda activate TwitterReplyEnv
+
+# 3. 必要ライブラリのインストール
+pip install selenium webdriver-manager beautifulsoup4 google-generativeai pandas sqlite3 psutil
+```
+
+### ステップ2: プロジェクトのクローン
+```bash
+# GitHubからクローン
+git clone https://github.com/Nyukimin/Twitter_reply_02.git
+cd Twitter_reply_02
+```
+
+### ステップ3: 設定ファイルの作成
+```bash
+# config.pyを作成して、必要な情報を入力
+cp reply_bot/config.py.template reply_bot/config.py
+# エディタで config.py を編集し、アカウント情報やAPIキーを設定
+```
+
+### ステップ4: 初回Cookieの取得
+```bash
+# 手動ログインでCookieを保存
+python -m reply_bot.get_cookie
+```
+
+### ステップ5: データベースの初期化
+```bash
+# ユーザー設定DB（オプション）
+python -m reply_bot.add_user_preferences
+```
+
+### ステップ6: 動作テスト
+```bash
+# ログイン状態の確認
+python -m reply_bot.check_login_status
+
+# ドライランでテスト実行
+python -m reply_bot.main
+
+# 正常に動作することを確認後、ライブモードテスト
+python -m reply_bot.main --live-run --limit 1
+```
+
+## よくある問題と解決方法
+
+### Q1: Chrome起動エラー（SessionNotCreatedException）
+**A1**: 残骸プロセスとロックファイルをクリーンアップ
+```powershell
+# Windows
+taskkill /f /im chrome.exe /im chromedriver.exe
+del "profiles\*\Singleton*"
+
+# Linux/macOS
+pkill chrome; pkill chromedriver
+rm -f profiles/*/Singleton*
+```
+
+### Q2: ログインが維持されない
+**A2**: Cookieの再取得が必要
+```bash
+python -m reply_bot.get_cookie
+```
+
+### Q3: Gemini APIエラー
+**A3**: APIキーとクォータの確認
+- [Google AI Studio](https://makersuite.google.com/app/apikey)でAPIキーを確認
+- APIの使用量制限を確認
+
+### Q4: 「プロファイルが使用中」エラー
+**A4**: 自動修復機能が働きます。それでも解決しない場合：
+```bash
+# 全ての一時プロファイルをクリーンアップ
+rm -rf profiles/_temp/
+```
+
+### Q5: メモリ不足でクラッシュ
+**A5**: ヘッドレスモードを使用し、処理件数を制限
+```bash
+python -m reply_bot.main --headless --limit 10
+```
+
+## サポートとデバッグ
+
+### ログの確認
+- メインログ: `log/main_process.log`
+- 個別ログ: `log/` フォルダ内の各ファイル
+
+### デバッグモード
+```bash
+# ブラウザを表示してデバッグ
+python -m reply_bot.main --limit 1
+
+# 詳細ログ付きで実行
+python -m reply_bot.main --headless --limit 1 2>&1 | tee debug.log
+```
+
+### パフォーマンス最適化
+```bash
+# 高速処理モード（過去2時間のみ、ヘッドレス、制限付き）
+python -m reply_bot.main --hours 2 --headless --limit 5 --live-run
+```
