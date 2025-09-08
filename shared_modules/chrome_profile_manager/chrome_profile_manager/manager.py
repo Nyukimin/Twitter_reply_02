@@ -173,11 +173,16 @@ class ProfiledChromeManager:
                 import platform
                 
                 # 対象プロファイルを使用しているプロセスを特定して終了
+                self.logger.warning("[開始] プロファイル特定のクリーンアップ開始")
+                self._log_chrome_processes("クリーンアップ開始時")
                 try:
                     killed_pids = self.kill_chrome_using_profile(profile_path, timeout=5)
                     if killed_pids:
                         self.logger.info(f"プロファイル使用中のChromeプロセスを終了: PIDs={killed_pids}")
                         time.sleep(1)  # プロセス終了を待つ
+                        # プロセス終了後の確認
+                        self.logger.warning("[確認] プロセス終了後の状態確認")
+                        self._log_chrome_processes("プロセス終了後")
                 except Exception as e:
                     self.logger.warning(f"プロファイル特定のプロセス終了でエラー: {e}")
                 
@@ -213,12 +218,19 @@ class ProfiledChromeManager:
                 
                 chrome_options = self._build_chrome_options(profile_path, **options)
                 # ChromeDriverのパスを取得（キャッシュ利用）
+                # ChromeDriver取得前のプロセス確認
+                self.logger.warning("[タイミング1] ChromeDriver取得前のプロセス確認")
+                self._log_chrome_processes("ChromeDriver取得前")
+                
                 if not self._driver_path:
                     self.logger.info("ChromeDriverを初回インストール中...")
                     # ChromeDriverManagerのインストール前に再度クリーンアップ
                     # (ChromeDriverManagerがChromeを起動する可能性があるため)
                     self._driver_path = ChromeDriverManager().install()
                     self.logger.info(f"ChromeDriverパス: {self._driver_path}")
+                    # ChromeDriverManager後のプロセス確認（重要）
+                    self.logger.warning("[タイミング2] ChromeDriverManager.install()後のプロセス確認")
+                    self._log_chrome_processes("ChromeDriverManager後")
                     # ChromeDriver取得後に再度プロファイル特定のクリーンアップ
                     try:
                         killed_pids = self.kill_chrome_using_profile(profile_path, timeout=2)
@@ -228,7 +240,10 @@ class ProfiledChromeManager:
                     except Exception:
                         pass
                 
+                # ChromeDriver Service作成後のプロセス確認
                 service = Service(self._driver_path)
+                self.logger.warning("[タイミング3] Service作成後のプロセス確認")
+                self._log_chrome_processes("Service作成後")
                 
                 # 実際のuser-data-dirをログ出力（デバッグ用）
                 absolute_profile_path = os.path.abspath(profile_path)
@@ -237,10 +252,32 @@ class ProfiledChromeManager:
                 # 最終的なプロファイルロック確認
                 self._cleanup_profile_locks(profile_path)
                 
+                # WebDriver初期化直前のChrome��ロセス確認（重要）
+                self.logger.warning("[重要] WebDriver初期化直前のプロセス確認開始")
+                pre_init_chrome_processes = []
+                try:
+                    for proc in psutil.process_iter(['pid', 'name']):
+                        try:
+                            proc_info = proc.info
+                            name = (proc_info.get('name') or "").lower()
+                            if 'chrome' in name or 'chromedriver' in name:
+                                pre_init_chrome_processes.append(f"PID={proc.pid}, Name={name}")
+                        except Exception:
+                            pass
+                    if pre_init_chrome_processes:
+                        self.logger.error(f"[警告] WebDriver初期化前にChromeプロセスが検出されました: {pre_init_chrome_processes}")
+                        self.logger.error(f"[警告] これらのプロセスがプロファイル {profile_path} を使用している可能性があります")
+                    else:
+                        self.logger.info("[OK] WebDriver初期化前にChromeプロセスは存在しません")
+                except Exception as e:
+                    self.logger.warning(f"プロセスチェックエラー: {e}")
+                
                 # WebDriver初期化直前に短い待機
                 time.sleep(0.3)
                 
+                self.logger.warning(f"[重要] webdriver.Chrome() 呼び出し開始: {time.time()}")
                 driver = webdriver.Chrome(service=service, options=chrome_options)
+                self.logger.warning(f"[重要] webdriver.Chrome() 呼び出し完了: {time.time()}")
                 
                 self.logger.info(f"Chrome起動成功: プロファイル={profile_path}")
                 return driver
@@ -627,6 +664,7 @@ class ProfiledChromeManager:
             
             profile_dir = Path(profile_path)
             if not profile_dir.exists():
+                self.logger.debug(f"プロファイルディレクトリが存在しません: {profile_path}")
                 return
             
             # 削除対象のロックファイル（拡張版）
@@ -641,19 +679,24 @@ class ProfiledChromeManager:
                 "optimization_guide_model_store/LOCK",
             ]
             
+            deleted_locks = []
+            failed_locks = []
+            
             # ルートディレクトリのロックファイル削除
             for lock_file in lock_files:
                 lock_path = profile_dir / lock_file
                 if lock_path.exists():
                     try:
-                        # Windowsの場合、読み取り専用属性を解除
+                        # Windows��場合、読み取り専用属性を解除
                         if lock_path.is_file():
                             import stat
                             import os
                             os.chmod(str(lock_path), stat.S_IWRITE)
                         lock_path.unlink()
+                        deleted_locks.append(str(lock_path))
                         self.logger.debug(f"ロックファイル削除: {lock_path}")
                     except Exception as e:
+                        failed_locks.append(f"{lock_path}: {e}")
                         self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
                         
             # Defaultディレクトリ内のロックファイルもチェック
@@ -669,10 +712,18 @@ class ProfiledChromeManager:
                                 import os
                                 os.chmod(str(lock_path), stat.S_IWRITE)
                             lock_path.unlink()
+                            deleted_locks.append(str(lock_path))
                             self.logger.debug(f"ロックファイル削除: {lock_path}")
                         except Exception as e:
+                            failed_locks.append(f"{lock_path}: {e}")
                             self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
                             
+            # ロックファイル削除の結果をログ出力
+            if deleted_locks:
+                self.logger.info(f"削除されたロックファイル数: {len(deleted_locks)}")
+            if failed_locks:
+                self.logger.error(f"削除に失敗したロックファイル: {failed_locks}")
+                
         except Exception as e:
             self.logger.warning(f"ロックファイルクリーンアップエラー: {e}")
     
@@ -827,6 +878,10 @@ class ProfiledChromeManager:
             normalized_profile_path = str(Path(profile_path).resolve())
             self.logger.debug(f"プロファイルパスを検索: {normalized_profile_path}")
             
+            # デバッグ用: 全Chromeプロセスをログ出力
+            chrome_processes_found = []
+            processes_with_no_cmdline = []
+            
             # psutilでプロセスを検索（特定プロファイルのみ）
             try:
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
@@ -835,20 +890,37 @@ class ProfiledChromeManager:
                         name = (proc_info.get('name') or "").lower()
                         
                         if 'chrome' in name or 'chromedriver' in name:
+                            chrome_processes_found.append(f"PID={proc.pid}, Name={name}")
+                            
                             # cmdlineの取得を試みる（権限エラーの可能性あり）
                             try:
                                 cmdline = proc_info.get('cmdline')
                                 if cmdline:
                                     cmdline_str = " ".join(cmdline)
+                                    # デバッグ用: cmdlineの一部をログ出力（プロファイルパス部分）
+                                    if '--user-data-dir' in cmdline_str:
+                                        self.logger.debug(f"Chrome PID={proc.pid} のuser-data-dir検出")
+                                        # user-data-dirの値を抽出してログ出力
+                                        for arg in cmdline:
+                                            if arg.startswith('--user-data-dir='):
+                                                detected_path = arg.replace('--user-data-dir=', '')
+                                                self.logger.debug(f"  検出されたパス: {detected_path}")
+                                                self.logger.debug(f"  探しているパス: {normalized_profile_path}")
+                                                self.logger.debug(f"  パス比較(小文字): {detected_path.lower()} vs {normalized_profile_path.lower()}")
+                                    
                                     # プロファイルパスの検索（大文字小文字を無視）
                                     if normalized_profile_path.lower() in cmdline_str.lower() or profile_path.lower() in cmdline_str.lower():
                                         self.logger.info(f"プロファイル使用中のプロセスを発見: PID={proc.pid}")
                                         self._terminate_process_safely(proc, timeout)
                                         killed_pids.append(proc.pid)
-                            except (psutil.AccessDenied, PermissionError):
+                                else:
+                                    processes_with_no_cmdline.append(f"PID={proc.pid}")
+                                    
+                            except (psutil.AccessDenied, PermissionError) as e:
                                 # cmdlineにアクセスできない場合はスキップ
                                 # 他のプロファイルの可能性があるため終了しない
-                                self.logger.debug(f"PID {proc.pid} のcmdlineにアクセスできません（スキップ）")
+                                processes_with_no_cmdline.append(f"PID={proc.pid} (権限エラー: {e})")
+                                self.logger.debug(f"PID {proc.pid} のcmdlineにアクセスできません: {e}")
                                 continue
                                 
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -859,10 +931,20 @@ class ProfiledChromeManager:
             except Exception as e:
                 self.logger.warning(f"psutilでのプロセス検索エラー: {e}")
             
+            # デバッグ情報をログ出力
+            if chrome_processes_found:
+                self.logger.debug(f"検出されたChromeプロセス: {chrome_processes_found}")
+            if processes_with_no_cmdline:
+                self.logger.warning(f"cmdlineを取得できなかったプロセス: {processes_with_no_cmdline}")
+            
             # 注意: 全Chromeプロセスを終了する処理は削除
             # 複数プロファイルの同時実行をサポートするため
             if not killed_pids:
-                self.logger.info("特定プロファイルのプロセスは見つかりませんでした（他のプロファイルは保持）")
+                if chrome_processes_found:
+                    self.logger.warning(f"Chromeプロセスは存在しますが、特定プロファイルのものは見つかりませんでした")
+                    self.logger.warning(f"プロファイルロックの問題の可能性があります。ロックファイルを確認してください。")
+                else:
+                    self.logger.info("特定プロファイルのプロセスは見つかりませんでした（他のプロファイルは保持）")
                     
         except Exception as e:
             self.logger.error(f"特定プロファイルのChrome終了エラー: {e}")
@@ -877,3 +959,27 @@ class ProfiledChromeManager:
             pass
             
         return killed_pids
+
+    def _log_chrome_processes(self, timing_label: str) -> None:
+        """Chrome/ChromeDriverプロセスの状態をログ出力（デバッグ用）
+        
+        Args:
+            timing_label: タイミングを示すラベル
+        """
+        try:
+            chrome_processes = []
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    proc_info = proc.info
+                    name = (proc_info.get('name') or "").lower()
+                    if 'chrome' in name or 'chromedriver' in name:
+                        chrome_processes.append(f"PID={proc.pid}, Name={name}")
+                except Exception:
+                    pass
+            
+            if chrome_processes:
+                self.logger.warning(f"[{timing_label}] Chrome関連プロセス: {chrome_processes}")
+            else:
+                self.logger.info(f"[{timing_label}] Chrome関連プロセスなし")
+        except Exception as e:
+            self.logger.debug(f"プロセスログ出力エラー: {e}")

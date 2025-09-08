@@ -17,6 +17,8 @@ except ImportError:
 
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Chrome Profile Managerのログレベルも設定
+logging.getLogger('shared_modules.chrome_profile_manager').setLevel(logging.INFO)
 
 def check_login(headless: bool = False):
     """
@@ -78,7 +80,14 @@ def main():
     """エントリーポイント"""
     parser = argparse.ArgumentParser(description="Twitterのログイン状態を確認します。")
     parser.add_argument('--headless', action='store_true', help='このフラグを立てると、ブラウザをヘッドレスモード（非表示）で起動します。')
+    parser.add_argument('--debug', action='store_true', help='デバッグログを有効にします。')
     args = parser.parse_args()
+    
+    # デバッグモードの設定
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logging.getLogger('shared_modules.chrome_profile_manager').setLevel(logging.DEBUG)
+        logging.info("デバッグモードが有効になりました。")
     
     check_login(headless=args.headless)
 
