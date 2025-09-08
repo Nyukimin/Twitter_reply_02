@@ -825,30 +825,55 @@ class ProfiledChromeManager:
         try:
             # 正規化されたプロファイルパスを取得
             normalized_profile_path = str(Path(profile_path).resolve())
-            pattern = re.compile(re.escape(normalized_profile_path), re.IGNORECASE)
+            self.logger.debug(f"プロファイルパスを検索: {normalized_profile_path}")
             
-            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                try:
-                    proc_info = proc.info
-                    name = (proc_info['name'] or "").lower()
-                    
-                    if name in ("chrome.exe", "msedge.exe", "chromedriver.exe"):
-                        cmdline = " ".join(proc_info.get("cmdline") or [])
-                        if pattern.search(cmdline):
-                            self._terminate_process_safely(proc, timeout)
-                            killed_pids.append(proc.pid)
-                            
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                    continue
-                except Exception as e:
-                    self.logger.warning(f"プロセス終了中のエラー: {e}")
+            # psutilでプロセスを検索（特定プロファイルのみ）
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        proc_info = proc.info
+                        name = (proc_info.get('name') or "").lower()
+                        
+                        if 'chrome' in name or 'chromedriver' in name:
+                            # cmdlineの取得を試みる（権限エラーの可能性あり）
+                            try:
+                                cmdline = proc_info.get('cmdline')
+                                if cmdline:
+                                    cmdline_str = " ".join(cmdline)
+                                    # プロファイルパスの検索（大文字小文字を無視）
+                                    if normalized_profile_path.lower() in cmdline_str.lower() or profile_path.lower() in cmdline_str.lower():
+                                        self.logger.info(f"プロファイル使用中のプロセスを発見: PID={proc.pid}")
+                                        self._terminate_process_safely(proc, timeout)
+                                        killed_pids.append(proc.pid)
+                            except (psutil.AccessDenied, PermissionError):
+                                # cmdlineにアクセスできない場合はスキップ
+                                # 他のプロファイルの可能性があるため終了しない
+                                self.logger.debug(f"PID {proc.pid} のcmdlineにアクセスできません（スキップ）")
+                                continue
+                                
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+                    except Exception as e:
+                        self.logger.debug(f"プロセス確認中のエラー: {e}")
+                        
+            except Exception as e:
+                self.logger.warning(f"psutilでのプロセス検索エラー: {e}")
+            
+            # 注意: 全Chromeプロセスを終了する処理は削除
+            # 複数プロファイルの同時実行をサポートするため
+            if not killed_pids:
+                self.logger.info("特定プロファイルのプロセスは見つかりませんでした（他のプロファイルは保持）")
                     
         except Exception as e:
             self.logger.error(f"特定プロファイルのChrome終了エラー: {e}")
             
         if killed_pids:
             self.logger.info(f"特定プロファイルのChromeプロセスを終了: PIDs={killed_pids}")
-            # プロセス終了後にロックファイルをクリーンアップ
+            
+        # プロセス終了後にロックファイルをクリーンアップ
+        try:
             self._cleanup_profile_locks(profile_path)
+        except Exception:
+            pass
             
         return killed_pids
