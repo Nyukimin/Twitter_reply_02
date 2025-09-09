@@ -157,8 +157,11 @@ class ProfiledChromeManager:
                 self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、新しい一時プロファイルを作成します。")
                 try:
                     import datetime
+                    import uuid
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    temp_profile_name = f"{profile_name}_temp_{timestamp}"
+                    unique_id = str(uuid.uuid4())[:8]
+                    pid = os.getpid()
+                    temp_profile_name = f"{profile_name}_emergency_{timestamp}_{pid}_{unique_id}"
                     
                     # 一時プロファイルでの起動を3回まで試行
                     for temp_attempt in range(3):
@@ -267,8 +270,10 @@ class ProfiledChromeManager:
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
-                    self.logger.info(f"リトライまで {0.5 * attempt} 秒待機...")
-                    time.sleep(0.5 * attempt)
+                    # プロセス終了とロック解除のためにより長い待機時間
+                    backoff_time = min(3.0 * (2 ** (attempt - 1)), 10.0)  # 3秒、6秒、10秒
+                    self.logger.info(f"リトライまで {backoff_time} 秒待機...")
+                    time.sleep(backoff_time)
                     
                 # 試行回数に応じて異なる戦略を採用
                 if attempt == 0:
@@ -1014,7 +1019,7 @@ class ProfiledChromeManager:
                 subprocess.run(["pkill", "-f", "chrome"], capture_output=True)
                 subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True)
             
-            time.sleep(2)  # プロセス終了の待機
+            time.sleep(3)  # プロセス終了の待機を延長
             self.logger.info("[完了] Chrome強制終了処理完了")
             
         except Exception as e:
@@ -1022,7 +1027,7 @@ class ProfiledChromeManager:
     
     def _launch_with_temporary_profile(self, **chrome_options) -> webdriver.Chrome:
         """
-        最後の手段：一時プロファイルでの起動
+        最後の手段：一時プロファイルでの起動（完全分離バージョン）
         
         Args:
             **chrome_options: Chrome起動オプション
@@ -1032,35 +1037,79 @@ class ProfiledChromeManager:
         """
         try:
             import tempfile
+            import uuid
             
-            # 一時ディレクトリ作成
-            temp_profile_path = tempfile.mkdtemp(prefix="chrome_temp_profile_")
-            self.logger.info(f"[一時プロファイル] 作成: {temp_profile_path}")
+            # 完全にユニークな一時ディレクトリ作成
+            unique_suffix = f"{int(time.time())}_{os.getpid()}_{str(uuid.uuid4())[:8]}"
+            temp_profile_path = tempfile.mkdtemp(prefix=f"chrome_emergency_{unique_suffix}_")
+            self.logger.info(f"[緊急プロファイル] 作成: {temp_profile_path}")
             
             # ChromeDriverのセットアップ
             service = Service(self._driver_path)
             
-            # 一時プロファイル用のChrome起動オプション
-            temp_options = self._build_chrome_options(temp_profile_path, **chrome_options)
+            # 緊急プロファイル用のChrome起動オプション（最小構成）
+            temp_options = self._build_emergency_chrome_options(temp_profile_path, **chrome_options)
             
-            # 追加の安定化オプション
-            temp_options.add_argument("--disable-features=VizDisplayCompositor")
-            temp_options.add_argument("--disable-gpu")
-            temp_options.add_argument("--disable-software-rasterizer")
-            temp_options.add_argument("--disable-background-timer-throttling")
-            temp_options.add_argument("--disable-backgrounding-occluded-windows")
-            temp_options.add_argument("--disable-renderer-backgrounding")
-            temp_options.add_argument("--disable-field-trial-config")
-            
-            self.logger.warning(f"[一時プロファイル] WebDriver起動開始")
+            self.logger.warning(f"[緊急プロファイル] WebDriver起動開始")
             driver = webdriver.Chrome(service=service, options=temp_options)
             
-            self.logger.info(f"[成功] 一時プロファイルでのChrome起動完了")
+            self.logger.info(f"[成功] 緊急プロファイルでのChrome起動完了")
             return driver
             
         except Exception as e:
-            self.logger.error(f"[失敗] 一時プロファイル起動エラー: {e}")
+            self.logger.error(f"[失敗] 緊急プロファイル起動エラー: {e}")
             raise
+    
+    def _build_emergency_chrome_options(self, profile_path: str, **custom_options) -> ChromeOptions:
+        """緊急時用の最小限Chrome起動オプション
+        
+        Args:
+            profile_path: プロファイルパス
+            **custom_options: カスタムオプション
+            
+        Returns:
+            ChromeOptions: 構築されたChromeオプション
+        """
+        options = ChromeOptions()
+        
+        # プロファイル設定（絶対パス）
+        import os
+        absolute_profile_path = os.path.abspath(profile_path)
+        options.add_argument(f"--user-data-dir={absolute_profile_path}")
+        options.add_argument("--profile-directory=Default")
+        
+        # 緊急時用オプション（最小限）
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-features=LockProfileData")
+        options.add_argument("--disable-features=ProcessSingletonLock")
+        options.add_argument("--disable-features=VizDisplayCompositor")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-plugins")
+        options.add_argument("--no-default-browser-check")
+        options.add_argument("--no-first-run")
+        options.add_argument("--disable-default-apps")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--single-process")  # 緊急時はシングルプロセス
+        options.add_argument("--remote-debugging-port=0")
+        
+        # 競合を最小化するための追加オプション
+        options.add_argument("--use-fake-ui-for-media-stream")
+        options.add_argument("--use-fake-device-for-media-stream")
+        options.add_argument("--disable-sync")
+        options.add_argument("--disable-background-networking")
+        options.add_argument("--disable-component-update")
+        
+        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logging"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        # ヘッドレスモード（必須）
+        if custom_options.get('headless', True):
+            options.add_argument("--headless=new")
+        
+        return options
     
     def _cleanup_chrome_registry(self):
         """
@@ -1350,12 +1399,11 @@ class ProfiledChromeManager:
                             shell=True,
                             capture_output=True,
                             text=True,
-                            timeout=3
+                            timeout=5
                         )
                         
                         if kill_result.returncode == 0:
                             self.logger.info("Chrome全体を強制終了しました（プロファイルロック解除）")
-                            # 実際のPIDは取得困難だが、便宜上1を返す
                             killed_pids.append(1)
                         
                         # ChromeDriverも終了
@@ -1363,11 +1411,19 @@ class ProfiledChromeManager:
                             'taskkill /F /IM chromedriver.exe',
                             shell=True,
                             capture_output=True,
-                            timeout=2
+                            timeout=3
                         )
                         
-                        # プロセス終了を待つ
-                        time.sleep(1)
+                        # 追加: Windowsハンドルのリークを防ぐためのより強力な終了
+                        subprocess.run(
+                            'wmic process where "name=\'chrome.exe\'" delete',
+                            shell=True,
+                            capture_output=True,
+                            timeout=5
+                        )
+                        
+                        # プロセス終了を待つ（延長）
+                        time.sleep(2)
                         
                     else:
                         self.logger.info("Chromeプロセスは検出されませんでした")
