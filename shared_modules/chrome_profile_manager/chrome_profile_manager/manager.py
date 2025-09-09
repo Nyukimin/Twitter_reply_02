@@ -651,81 +651,140 @@ class ProfiledChromeManager:
             # 致命的でない限り例外は投げない（リトライループを防ぐ）
             self.logger.warning("プロセス終了に失敗しましたが、処理を続行します")
     
-    def _cleanup_profile_locks(self, profile_path: str) -> None:
-        """プロファイルのロックファイルをクリーンアップ
+    def _cleanup_profile_locks(self, profile_path: str):
+        """プロファイルディレクトリのロックファイルを強制的にクリーンアップ
         
-        Args:
-            profile_path: プロファイルパス
+        Windows環境での権限問題に対応した強化版。
         """
-        try:
-            import time
-            # プロセス終了後の安定化を待つ
-            time.sleep(1)
+        profile_dir = Path(profile_path)
+        if not profile_dir.exists():
+            return
             
-            profile_dir = Path(profile_path)
-            if not profile_dir.exists():
-                self.logger.debug(f"プロファイルディレクトリが存在しません: {profile_path}")
-                return
+        import platform
+        is_windows = platform.system() == 'Windows'
+        
+        # ロックファイルパターンを拡張
+        lock_patterns = [
+            'Singleton*',
+            '*.lock',
+            'lockfile*', 
+            'parent.lock',
+            '*/LOCK',
+            'SingletonLock',
+            'SingletonSocket',
+            'SingletonCookie',
+            '.org.chromium.Chromium.*'  # Linux/Mac用
+        ]
+        
+        cleaned_files = []
+        
+        # Windows環境での強制削除関数
+        def force_remove_windows(file_path: Path):
+            """Windows環境でファイルを強制削除"""
+            if not file_path.exists():
+                return True
+                
+            try:
+                # まず通常の削除を試みる
+                if file_path.is_file():
+                    # 読み取り専用属性を解除
+                    import stat
+                    try:
+                        file_path.chmod(stat.S_IWRITE)
+                    except:
+                        pass
+                    file_path.unlink()
+                    return True
+            except:
+                pass
+                
+            # 通常削除が失敗した場合、コマンドラインツールを使用
+            if is_windows:
+                try:
+                    import subprocess
+                    # delコマンドで強制削除
+                    result = subprocess.run(
+                        f'del /F /Q "{str(file_path)}"',
+                        shell=True,
+                        capture_output=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        return True
+                except:
+                    pass
+                    
+                try:
+                    # PowerShellでの削除も試みる
+                    ps_cmd = f'Remove-Item -Path "{str(file_path)}" -Force -ErrorAction SilentlyContinue'
+                    subprocess.run(
+                        ['powershell', '-Command', ps_cmd],
+                        capture_output=True,
+                        timeout=5
+                    )
+                    return not file_path.exists()
+                except:
+                    pass
             
-            # 削除対象のロックファイル（拡張版）
-            lock_files = [
-                "SingletonLock",
-                "SingletonCookie",
-                "SingletonSocket",
-                "lockfile",
-                "parent.lock",
-                "data_reduction_proxy_leveldb/LOCK",
-                "shared_proto_db/LOCK",
-                "optimization_guide_model_store/LOCK",
+            return False
+        
+        # 各パターンに対してロックファイルを削除
+        for pattern in lock_patterns:
+            # トップレベルのファイル
+            for lock_file in profile_dir.glob(pattern):
+                try:
+                    if lock_file.is_file():
+                        if is_windows:
+                            if force_remove_windows(lock_file):
+                                cleaned_files.append(str(lock_file))
+                                self.logger.debug(f"ロックファイル削除（強制）: {lock_file}")
+                        else:
+                            lock_file.unlink()
+                            cleaned_files.append(str(lock_file))
+                            self.logger.debug(f"ロックファイル削除: {lock_file}")
+                except Exception as e:
+                    self.logger.warning(f"ロックファイル削除失敗: {lock_file}, エラー: {e}")
+                    
+            # サブディレクトリ内のファイル
+            try:
+                for lock_file in profile_dir.glob(f"**/{pattern}"):
+                    try:
+                        if lock_file.is_file():
+                            if is_windows:
+                                if force_remove_windows(lock_file):
+                                    cleaned_files.append(str(lock_file))
+                                    self.logger.debug(f"ロックファイル削除（サブディレクトリ・強制）: {lock_file}")
+                            else:
+                                lock_file.unlink()
+                                cleaned_files.append(str(lock_file))
+                                self.logger.debug(f"ロックファイル削除（サブディレクトリ）: {lock_file}")
+                    except Exception as e:
+                        self.logger.debug(f"サブディレクトリのロックファイル削除失敗: {lock_file}, エラー: {e}")
+            except Exception:
+                pass
+        
+        # Windows環境での追加クリーンアップ
+        if is_windows:
+            # Default/SingletonLock などの特定ファイルを直接削除
+            specific_locks = [
+                profile_dir / 'Default' / 'SingletonLock',
+                profile_dir / 'Default' / 'SingletonSocket',
+                profile_dir / 'Default' / 'SingletonCookie',
+                profile_dir / 'SingletonLock',
+                profile_dir / 'SingletonSocket',
+                profile_dir / 'SingletonCookie',
             ]
             
-            deleted_locks = []
-            failed_locks = []
-            
-            # ルートディレクトリのロックファイル削除
-            for lock_file in lock_files:
-                lock_path = profile_dir / lock_file
-                if lock_path.exists():
-                    try:
-                        # Windows��場合、読み取り専用属性を解除
-                        if lock_path.is_file():
-                            import stat
-                            import os
-                            os.chmod(str(lock_path), stat.S_IWRITE)
-                        lock_path.unlink()
-                        deleted_locks.append(str(lock_path))
-                        self.logger.debug(f"ロックファイル削除: {lock_path}")
-                    except Exception as e:
-                        failed_locks.append(f"{lock_path}: {e}")
-                        self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
-                        
-            # Defaultディレクトリ内のロックファイルもチェック
-            default_dir = profile_dir / "Default"
-            if default_dir.exists():
-                for lock_file in lock_files:
-                    lock_path = default_dir / lock_file
-                    if lock_path.exists():
-                        try:
-                            # Windowsの場合、読み取り専用属性を解除
-                            if lock_path.is_file():
-                                import stat
-                                import os
-                                os.chmod(str(lock_path), stat.S_IWRITE)
-                            lock_path.unlink()
-                            deleted_locks.append(str(lock_path))
-                            self.logger.debug(f"ロックファイル削除: {lock_path}")
-                        except Exception as e:
-                            failed_locks.append(f"{lock_path}: {e}")
-                            self.logger.warning(f"ロックファイル削除失敗 {lock_path}: {e}")
-                            
-            # ロックファイル削除の結果をログ出力
-            if deleted_locks:
-                self.logger.info(f"削除されたロックファイル数: {len(deleted_locks)}")
-            if failed_locks:
-                self.logger.error(f"削除に失敗したロックファイル: {failed_locks}")
-                
-        except Exception as e:
-            self.logger.warning(f"ロックファイルクリーンアップエラー: {e}")
+            for lock_file in specific_locks:
+                if lock_file.exists() and lock_file.is_file():
+                    if force_remove_windows(lock_file):
+                        cleaned_files.append(str(lock_file))
+                        self.logger.debug(f"特定ロックファイル削除: {lock_file}")
+        
+        if cleaned_files:
+            self.logger.info(f"ロックファイルクリーンアップ完了: {len(cleaned_files)}個のファイルを削除")
+        else:
+            self.logger.debug("削除すべきロックファイルは見つかりませんでした")
     
     def _terminate_process_safely(self, process: psutil.Process, timeout: int = 10) -> None:
         """プロセスを安全に終了
@@ -864,6 +923,9 @@ class ProfiledChromeManager:
     def kill_chrome_using_profile(self, profile_path: str, timeout: int = 10) -> list[int]:
         """特定プロファイルを使用しているChromeプロセスのみを終了
         
+        Windows環境での権限エラーに対応した改善版。
+        PowerShellとtaskkillを使用した強制終了機能を追加。
+        
         Args:
             profile_path: 対象プロファイルパス
             timeout: プロセス終了タイムアウト
@@ -874,15 +936,91 @@ class ProfiledChromeManager:
         killed_pids = []
         
         try:
+            import platform
+            is_windows = platform.system() == 'Windows'
+            
             # 正規化されたプロファイルパスを取得
             normalized_profile_path = str(Path(profile_path).resolve())
             self.logger.debug(f"プロファイルパスを検索: {normalized_profile_path}")
             
-            # デバッグ用: 全Chromeプロセスをログ出力
+            # Windows環境での強制終了（最初に実行）
+            if is_windows:
+                self.logger.info("Windows環境での強制プロセス終了を開始")
+                
+                # PowerShellを使用してプロファイル特定のChromeプロセスを終了
+                try:
+                    import subprocess
+                    
+                    # PowerShellコマンドでプロファイルパスを含むChromeプロセスを検索して終了
+                    # エスケープ処理を適切に行う
+                    escaped_path = normalized_profile_path.replace('\\', '\\\\')
+                    
+                    # WMIを使用してコマンドラインからプロセスを特定
+                    ps_script = f'''
+                    Get-WmiObject Win32_Process | Where-Object {{
+                        $_.Name -like "*chrome*" -and 
+                        $_.CommandLine -like "*{escaped_path}*"
+                    }} | ForEach-Object {{
+                        $_.ProcessId
+                        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                    }}
+                    '''
+                    
+                    result = subprocess.run(
+                        ['powershell', '-ExecutionPolicy', 'Bypass', '-Command', ps_script],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    
+                    if result.stdout:
+                        for line in result.stdout.strip().split('\n'):
+                            if line.strip().isdigit():
+                                pid = int(line.strip())
+                                killed_pids.append(pid)
+                                self.logger.info(f"PowerShellで終了: PID={pid}")
+                    
+                except subprocess.TimeoutExpired:
+                    self.logger.warning("PowerShell実行がタイムアウトしました")
+                except Exception as e:
+                    self.logger.warning(f"PowerShell実行エラー: {e}")
+                
+                # WMICを使用した代替手段
+                if not killed_pids:
+                    try:
+                        # WMICでプロファイルパスを含むプロセスを検索
+                        wmic_cmd = f'wmic process where "name like \'%chrome%\'" get ProcessId,CommandLine /format:csv'
+                        result = subprocess.run(
+                            wmic_cmd,
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=10
+                        )
+                        
+                        for line in result.stdout.split('\n'):
+                            if normalized_profile_path.lower() in line.lower():
+                                # ProcessIDを抽出
+                                parts = line.split(',')
+                                if len(parts) >= 3 and parts[-1].strip().isdigit():
+                                    pid = int(parts[-1].strip())
+                                    # taskkillで強制終了
+                                    kill_result = subprocess.run(
+                                        f'taskkill /F /PID {pid}',
+                                        shell=True,
+                                        capture_output=True,
+                                        timeout=5
+                                    )
+                                    if kill_result.returncode == 0:
+                                        killed_pids.append(pid)
+                                        self.logger.info(f"WMICで検出し終了: PID={pid}")
+                    except Exception as e:
+                        self.logger.warning(f"WMIC実行エラー: {e}")
+            
+            # psutilでのプロセス検索（フォールバック）
             chrome_processes_found = []
             processes_with_no_cmdline = []
             
-            # psutilでプロセスを検索（特定プロファイルのみ）
             try:
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                     try:
@@ -892,37 +1030,30 @@ class ProfiledChromeManager:
                         if 'chrome' in name or 'chromedriver' in name:
                             chrome_processes_found.append(f"PID={proc.pid}, Name={name}")
                             
-                            # cmdlineの取得を試みる（権限エラーの可能性あり）
+                            # cmdlineの取得を試みる
+                            cmdline = None
                             try:
                                 cmdline = proc_info.get('cmdline')
-                                if cmdline:
-                                    cmdline_str = " ".join(cmdline)
-                                    # デバッグ用: cmdlineの一部をログ出力（プロファイルパス部分）
-                                    if '--user-data-dir' in cmdline_str:
-                                        self.logger.debug(f"Chrome PID={proc.pid} のuser-data-dir検出")
-                                        # user-data-dirの値を抽出してログ出力
-                                        for arg in cmdline:
-                                            if arg.startswith('--user-data-dir='):
-                                                detected_path = arg.replace('--user-data-dir=', '')
-                                                self.logger.debug(f"  検出されたパス: {detected_path}")
-                                                self.logger.debug(f"  探しているパス: {normalized_profile_path}")
-                                                self.logger.debug(f"  パス比較(小文字): {detected_path.lower()} vs {normalized_profile_path.lower()}")
-                                    
-                                    # プロファイルパスの検索（大文字小文字を無視）
-                                    if normalized_profile_path.lower() in cmdline_str.lower() or profile_path.lower() in cmdline_str.lower():
-                                        self.logger.info(f"プロファイル使用中のプロセスを発見: PID={proc.pid}")
-                                        self._terminate_process_safely(proc, timeout)
-                                        killed_pids.append(proc.pid)
-                                else:
-                                    processes_with_no_cmdline.append(f"PID={proc.pid}")
-                                    
                             except (psutil.AccessDenied, PermissionError) as e:
-                                # cmdlineにアクセスできない場合はスキップ
-                                # 他のプロファイルの可能性があるため終了しない
-                                processes_with_no_cmdline.append(f"PID={proc.pid} (権限エラー: {e})")
-                                self.logger.debug(f"PID {proc.pid} のcmdlineにアクセスできません: {e}")
+                                # Windows環境で権限エラーが発生した場合、既に上で処理済み
+                                if is_windows:
+                                    if proc.pid not in killed_pids:
+                                        processes_with_no_cmdline.append(f"PID={proc.pid} (権限エラー)")
                                 continue
+                            
+                            if cmdline:
+                                cmdline_str = " ".join(cmdline) if isinstance(cmdline, list) else str(cmdline)
                                 
+                                # プロファイルパスの検索（大文字小文字を無視）
+                                if normalized_profile_path.lower() in cmdline_str.lower():
+                                    if proc.pid not in killed_pids:
+                                        self.logger.info(f"psutilで検出: PID={proc.pid}")
+                                        try:
+                                            self._terminate_process_safely(proc, timeout)
+                                            killed_pids.append(proc.pid)
+                                        except Exception as e:
+                                            self.logger.warning(f"プロセス終了失敗: PID={proc.pid}, エラー: {e}")
+                                            
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         continue
                     except Exception as e:
@@ -937,12 +1068,9 @@ class ProfiledChromeManager:
             if processes_with_no_cmdline:
                 self.logger.warning(f"cmdlineを取得できなかったプロセス: {processes_with_no_cmdline}")
             
-            # 注意: 全Chromeプロセスを終了する処理は削除
-            # 複数プロファイルの同時実行をサポートするため
             if not killed_pids:
                 if chrome_processes_found:
-                    self.logger.warning(f"Chromeプロセスは存在しますが、特定プロファイルのものは見つかりませんでした")
-                    self.logger.warning(f"プロファイルロックの問題の可能性があります。ロックファイルを確認してください。")
+                    self.logger.info("Chromeプロセスは存在しますが、特定プロファイルのものは見つかりませんでした")
                 else:
                     self.logger.info("特定プロファイルのプロセスは見つかりませんでした（他のプロファイルは保持）")
                     
@@ -951,6 +1079,8 @@ class ProfiledChromeManager:
             
         if killed_pids:
             self.logger.info(f"特定プロファイルのChromeプロセスを終了: PIDs={killed_pids}")
+            # プロセス終了を待つ
+            time.sleep(1)
             
         # プロセス終了後にロックファイルをクリーンアップ
         try:

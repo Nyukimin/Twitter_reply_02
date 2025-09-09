@@ -197,6 +197,27 @@ python -m reply_bot.add_user_preferences
 
 ### 6. スクリプトの実行
 
+#### 自動クリーンアップ付き実行（Windows推奨）
+
+Windows環境でChromeプロファイルのロック問題を回避するため、自動クリーンアップスクリプトを使用することを推奨します：
+
+```bash
+# バッチファイル版（簡易）
+run_with_cleanup.bat
+
+# PowerShell版（詳細なログ付き）
+powershell -ExecutionPolicy Bypass -File run_with_cleanup.ps1
+
+# デバッグモードで実行
+run_with_cleanup.bat --debug
+```
+
+これらのスクリプトは以下を自動的に実行します：
+1. 特定プロファイルのChromeプロセスのみを終了（他のChromeは影響なし）
+2. ChromeDriverプロセスを終了
+3. ロックファイルを削除
+4. メインプログラムを起動
+
 #### 基本的な実行方法
 全てのセットアップが完了したら、`main.py` を実行します。
 ```bash
