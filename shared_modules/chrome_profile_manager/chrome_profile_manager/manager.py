@@ -19,7 +19,6 @@ import subprocess
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from webdriver_manager.chrome import ChromeDriverManager
 
 from .exceptions import ProfileNotFoundError, ProfileCreationError, ChromeLaunchError, ProcessKillError
 
@@ -35,8 +34,10 @@ class ProfiledChromeManager:
         self.base_profiles_dir = Path(base_profiles_dir)
         self.base_profiles_dir.mkdir(parents=True, exist_ok=True)
         self.logger = logging.getLogger(__name__)
-        # ChromeDriverのパスをキャッシュして再利用
+        # fixed_chromeディレクトリのパスを設定
+        self.fixed_chrome_dir = Path("fixed_chrome")
         self._driver_path = None
+        self._chrome_binary_path = None
         
     def create_and_launch(
         self, 
@@ -308,11 +309,38 @@ class ProfiledChromeManager:
                 self.logger.warning(f"[タイミング1] ChromeDriver取得前のプロセス確認")
                 self._log_chrome_processes("[ChromeDriver取得前]")
                 
-                # ChromeDriverのセットアップ
+                # fixed_chrome ChromeDriverのセットアップ
                 if not self._driver_path:
-                    self.logger.info("ChromeDriverを初回インストール中...")
-                    self._driver_path = ChromeDriverManager().install()
-                    self.logger.info(f"ChromeDriverパス: {self._driver_path}")
+                    self.logger.info("fixed_chrome ChromeDriverをセットアップ中...")
+                    
+                    # fixed_chromeディレクトリのChromeDriverパスを設定
+                    chromedriver_path = self.fixed_chrome_dir / "chromedriver" / "chromedriver-win64" / "chromedriver.exe"
+                    chrome_binary_path = self.fixed_chrome_dir / "chrome" / "chrome-win64" / "chrome.exe"
+                    
+                    if not chromedriver_path.exists():
+                        raise ChromeLaunchError(f"ChromeDriverが見つかりません: {chromedriver_path}")
+                    if not chrome_binary_path.exists():
+                        raise ChromeLaunchError(f"Chrome実行ファイルが見つかりません: {chrome_binary_path}")
+                    
+                    self._driver_path = str(chromedriver_path)
+                    self._chrome_binary_path = str(chrome_binary_path)
+                    
+                    # バージョン確認
+                    chrome_version = self._get_fixed_chrome_version()
+                    driver_version = self._get_chromedriver_version(self._driver_path)
+                    
+                    self.logger.info(f"✅ fixed_chrome Chrome: {chrome_version}")
+                    self.logger.info(f"✅ fixed_chrome ChromeDriver: {driver_version}")
+                    
+                    if chrome_version and driver_version:
+                        compatibility = self._check_version_compatibility(chrome_version, driver_version)
+                        if compatibility:
+                            self.logger.info(f"✅ バージョン互換性: {compatibility}")
+                        else:
+                            self.logger.warning("⚠️ バージョン互換性の確認に失敗")
+                    
+                    self.logger.info(f"📁 ChromeDriverパス: {self._driver_path}")
+                    self.logger.info(f"📁 Chrome実行ファイルパス: {self._chrome_binary_path}")
                     self.logger.warning(f"[タイミング2] ChromeDriverManager.install()後のプロセス確認")
                     self._log_chrome_processes("[ChromeDriverManager後]")
                     try:
@@ -349,7 +377,9 @@ class ProfiledChromeManager:
                 
             except Exception as e:
                 last_exception = e
-                self.logger.error(f"Chrome起動エラー（試行 {attempt + 1}/{max_retries}）: {str(e)}")
+                # エラーメッセージを読みやすく整形
+                formatted_error = self._format_chrome_error_message(str(e))
+                self.logger.error(f"Chrome起動エラー（試行 {attempt + 1}/{max_retries}）:\n{formatted_error}")
                 
                 # プロセス強制終了を試行
                 try:
@@ -478,6 +508,11 @@ class ProfiledChromeManager:
         """
         options = ChromeOptions()
         
+        # fixed_chrome Chrome実行ファイルのパスを設定
+        if self._chrome_binary_path:
+            options.binary_location = self._chrome_binary_path
+            self.logger.info(f"Chrome実行ファイルを指定: {self._chrome_binary_path}")
+        
         # プロファイル設定
         # Windowsの権限問題対策: 絶対パスを使用
         import os
@@ -489,9 +524,13 @@ class ProfiledChromeManager:
         options.add_argument("--disable-features=LockProfileData")
         options.add_argument("--disable-features=ProcessSingletonLock")
         
-        # 基本ステルス設定
+        # 一般的な「user data directory already in use」対策
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--single-process")  # マルチプロセス完全無効化
+        options.add_argument("--disable-gpu")     # GPU競合回避
+        options.add_argument("--disable-software-rasterizer")  # ソフトウェアレンダリング無効化
+        options.add_argument("--no-zygote")       # Zygoteプロセス無効化
         
         # Windows専用: SingletonLockエラー対策
         import platform
@@ -582,7 +621,7 @@ class ProfiledChromeManager:
             self.logger.error(f"プロファイル削除エラー: {e}")
             return False
     
-    def backup_profile(self, profile_name: str, backup_name: str = None) -> str:
+    def backup_profile(self, profile_name: str, backup_name: Optional[str] = None) -> str:
         """プロファイルをバックアップ
         
         Args:
@@ -1045,6 +1084,8 @@ class ProfiledChromeManager:
             self.logger.info(f"[緊急プロファイル] 作成: {temp_profile_path}")
             
             # ChromeDriverのセットアップ
+            if not self._driver_path:
+                raise ChromeLaunchError("ChromeDriverのパスが取得できませんでした")
             service = Service(self._driver_path)
             
             # 緊急プロファイル用のChrome起動オプション（最小構成）
@@ -1071,6 +1112,10 @@ class ProfiledChromeManager:
             ChromeOptions: 構築されたChromeオプション
         """
         options = ChromeOptions()
+        
+        # fixed_chrome Chrome実行ファイルのパスを設定
+        if self._chrome_binary_path:
+            options.binary_location = self._chrome_binary_path
         
         # プロファイル設定（絶対パス）
         import os
@@ -1241,7 +1286,18 @@ class ProfiledChromeManager:
             if platform.system() == "Windows":
                 process.kill()
             else:
-                process.send_signal(signal.SIGKILL)
+                try:
+                    # Unix系でのみSIGKILLを使用
+                    if platform.system() != "Windows":
+                        try:
+                            process.send_signal(9)  # SIGKILL = 9
+                        except (AttributeError, OSError):
+                            process.kill()
+                    else:
+                        process.kill()
+                except (AttributeError, OSError):
+                    # フォールバック
+                    process.kill()
                 
             # 強制終了の完了を待機
             try:
@@ -1257,7 +1313,7 @@ class ProfiledChromeManager:
             self.logger.error(f"プロセス {process.pid} の終了中にエラー: {e}")
             raise
     
-    def get_running_chrome_processes(self, profile_path: str = None) -> List[Dict]:
+    def get_running_chrome_processes(self, profile_path: Optional[str] = None) -> List[Dict]:
         """実行中のChromeプロセス情報を取得
         
         Args:
@@ -1269,7 +1325,7 @@ class ProfiledChromeManager:
         chrome_processes = []
         
         try:
-            normalized_profile_path = None
+            normalized_profile_path = ""
             if profile_path:
                 normalized_profile_path = str(Path(profile_path).resolve())
             
@@ -1287,7 +1343,7 @@ class ProfiledChromeManager:
                         if not cmdline:
                             continue
                         cmdline_str = ' '.join(cmdline)
-                        if normalized_profile_path not in cmdline_str and profile_path not in cmdline_str:
+                        if profile_path and normalized_profile_path and (normalized_profile_path not in cmdline_str and profile_path not in cmdline_str):
                             continue
                     
                     chrome_processes.append({
@@ -1527,3 +1583,248 @@ class ProfiledChromeManager:
                 self.logger.info(f"[{timing_label}] Chrome関連プロセスなし")
         except Exception as e:
             self.logger.debug(f"プロセスログ出力エラー: {e}")
+
+    def _format_chrome_error_message(self, error_message: str) -> str:
+        """ChromeDriverエラーメッセージを読みやすく整形
+        
+        Args:
+            error_message: 元のエラーメッセージ
+            
+        Returns:
+            str: 整形されたエラーメッセージ
+        """
+        try:
+            import json
+            import re
+            
+            # エスケープシーケンスを実際の文字に変換
+            formatted_message = error_message.replace('\\n', '\n').replace('\\t', '\t')
+            
+            # JSONが含まれている場合は整形
+            if '"stacktrace":' in formatted_message and '"message":' in formatted_message:
+                # JSONの部分を抽出して整形
+                json_pattern = r'data=(\{.*?\})'
+                match = re.search(json_pattern, formatted_message)
+                if match:
+                    try:
+                        json_str = match.group(1)
+                        json_obj = json.loads(json_str)
+                        
+                        # 整形されたJSONを作成
+                        formatted_json = json.dumps(json_obj, indent=2, ensure_ascii=False)
+                        
+                        # 元のJSONを整形されたもので置換
+                        formatted_message = formatted_message.replace(json_str, '\n' + formatted_json)
+                        
+                        # 特にstacktraceを読みやすく整形
+                        if 'stacktrace' in json_obj.get('value', {}):
+                            stacktrace = json_obj['value']['stacktrace']
+                            # \nで分割してインデントを追加
+                            formatted_stacktrace = '\n'.join(['    ' + line.strip() for line in stacktrace.split('\\n') if line.strip()])
+                            formatted_message += '\n\n📋 詳細スタックトレース:\n' + formatted_stacktrace
+                            
+                    except json.JSONDecodeError:
+                        pass
+            
+            return formatted_message
+            
+        except Exception:
+            # 整形に失敗した場合は元のメッセージを返す
+            return error_message
+
+    def _get_chrome_version(self) -> Optional[str]:
+        """システムにインストールされているChromeのバージョンを取得
+        
+        Returns:
+            str: Chromeのバージョン文字列（例: "120.0.6099.109"）、取得失敗時はNone
+        """
+        try:
+            import subprocess
+            import re
+            import platform
+            
+            if platform.system() == "Windows":
+                # Windowsでのバージョン取得方法
+                possible_paths = [
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Users\\{}\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe".format(os.getenv('USERNAME', ''))
+                ]
+                
+                for chrome_path in possible_paths:
+                    if os.path.exists(chrome_path):
+                        try:
+                            # PowerShellを使用してファイルのバージョン情報を取得
+                            cmd = f'powershell "Get-ItemProperty \\"{chrome_path}\\" | Select-Object -ExpandProperty VersionInfo | Select-Object -ExpandProperty FileVersion"'
+                            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
+                            if result.returncode == 0:
+                                version = result.stdout.strip()
+                                if version and re.match(r'\d+\.\d+\.\d+\.\d+', version):
+                                    self.logger.info(f"Chromeバージョン取得成功: {version} (パス: {chrome_path})")
+                                    return version
+                        except Exception as e:
+                            self.logger.debug(f"バージョン取得失敗 {chrome_path}: {e}")
+                            continue
+                
+                # 代替方法: chrome --version コマンド
+                try:
+                    result = subprocess.run(['chrome', '--version'], capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                        if match:
+                            version = match.group(1)
+                            self.logger.info(f"Chromeバージョン取得成功 (コマンド): {version}")
+                            return version
+                except Exception as e:
+                    self.logger.debug(f"chrome --version コマンド失敗: {e}")
+                    
+            else:
+                # Linux/Macでのバージョン取得
+                try:
+                    result = subprocess.run(['google-chrome', '--version'], capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                        if match:
+                            version = match.group(1)
+                            self.logger.info(f"Chromeバージョン取得成功: {version}")
+                            return version
+                except Exception:
+                    pass
+                    
+                # Chromium の場合
+                try:
+                    result = subprocess.run(['chromium-browser', '--version'], capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                        if match:
+                            version = match.group(1)
+                            self.logger.info(f"Chromiumバージョン取得成功: {version}")
+                            return version
+                except Exception:
+                    pass
+            
+            self.logger.warning("Chromeバージョンの取得に失敗しました")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Chromeバージョン取得エラー: {e}")
+            return None
+
+    def _get_chromedriver_version(self, driver_path: str) -> Optional[str]:
+        """ChromeDriverの実際のバージョンを取得
+        
+        Args:
+            driver_path: ChromeDriverの実行ファイルパス
+            
+        Returns:
+            str: ChromeDriverのバージョン文字列、取得失敗時はNone
+        """
+        try:
+            import subprocess
+            import re
+            
+            if not driver_path or not os.path.exists(driver_path):
+                self.logger.warning(f"ChromeDriverファイルが存在しません: {driver_path}")
+                return None
+                
+            # ChromeDriver --version コマンドでバージョン取得
+            result = subprocess.run([driver_path, '--version'],
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                # "ChromeDriver 120.0.6099.109 (..." の形式から抽出
+                match = re.search(r'ChromeDriver\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                if match:
+                    version = match.group(1)
+                    self.logger.debug(f"ChromeDriverバージョン抽出成功: {version}")
+                    return version
+                else:
+                    self.logger.debug(f"ChromeDriverバージョン抽出失敗: {result.stdout}")
+            else:
+                self.logger.warning(f"ChromeDriver --version コマンド失敗: {result.stderr}")
+                
+        except subprocess.TimeoutExpired:
+            self.logger.warning("ChromeDriverバージョン取得がタイムアウト")
+        except Exception as e:
+            self.logger.warning(f"ChromeDriverバージョン取得エラー: {e}")
+            
+        return None
+
+def _get_fixed_chrome_version(self) -> Optional[str]:
+    """fixed_chromeディレクトリのChromeバージョンを取得
+    
+    Returns:
+        str: Chromeのバージョン文字列、取得失敗時はNone
+    """
+    try:
+        if not self._chrome_binary_path or not os.path.exists(self._chrome_binary_path):
+            self.logger.warning(f"Chrome実行ファイルが存在しません: {self._chrome_binary_path}")
+            return None
+        
+        import subprocess
+        import platform
+        
+        if platform.system() == "Windows":
+            # PowerShellを使用してファイルのバージョン情報を取得
+            cmd = f'powershell "(Get-ItemProperty \\"{self._chrome_binary_path}\\").VersionInfo.FileVersion"'
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
+            if result.returncode == 0:
+                version = result.stdout.strip()
+                if version:
+                    self.logger.info(f"fixed_chrome Chromeバージョン取得成功: {version}")
+                    return version
+        else:
+            # 非Windows環境での処理
+            try:
+                result = subprocess.run([self._chrome_binary_path, '--version'],
+                                      capture_output=True, text=True, timeout=10)
+                if result.returncode == 0:
+                    import re
+                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    if match:
+                        version = match.group(1)
+                        self.logger.info(f"fixed_chrome Chromeバージョン取得成功: {version}")
+                        return version
+            except Exception as e:
+                self.logger.debug(f"chrome --version コマンド失敗: {e}")
+        
+        self.logger.warning("fixed_chrome Chromeバージョンの取得に失敗しました")
+        return None
+        
+    except Exception as e:
+        self.logger.error(f"fixed_chrome Chromeバージョン取得エラー: {e}")
+        return None
+
+    def _check_version_compatibility(self, chrome_version: str, driver_version: str) -> Optional[str]:
+        """ChromeとChromeDriverのバージョン互換性をチェック
+        
+        Args:
+            chrome_version: Chromeのバージョン
+            driver_version: ChromeDriverのバージョン
+            
+        Returns:
+            str: 互換性の状況メッセージ、チェック失敗時はNone
+        """
+        try:
+            # メジャーバージョンを抽出 (例: "120.0.6099.109" → "120")
+            chrome_major = chrome_version.split('.')[0]
+            driver_major = driver_version.split('.')[0]
+            
+            if chrome_major == driver_major:
+                return f"完全一致 (Chrome {chrome_major}.x ↔ ChromeDriver {driver_major}.x)"
+            else:
+                # バージョン差をチェック
+                chrome_ver = int(chrome_major)
+                driver_ver = int(driver_major)
+                diff = abs(chrome_ver - driver_ver)
+                
+                if diff == 0:
+                    return f"完全一致 (v{chrome_major})"
+                elif diff <= 2:
+                    return f"互換性あり (Chrome v{chrome_major} ↔ ChromeDriver v{driver_major}, 差: {diff})"
+                else:
+                    return f"⚠️ 大幅な差 (Chrome v{chrome_major} ↔ ChromeDriver v{driver_major}, 差: {diff})"
+                    
+        except Exception as e:
+            self.logger.warning(f"バージョン互換性チェックエラー: {e}")
+            return None

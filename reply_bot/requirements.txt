@@ -6,5 +6,4 @@ pyperclip
 pytz
 selenium
 snscrape
-webdriver-manager 
 psutil
