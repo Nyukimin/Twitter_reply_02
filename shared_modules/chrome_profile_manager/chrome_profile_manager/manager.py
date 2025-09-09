@@ -1073,7 +1073,7 @@ class ProfiledChromeManager:
             self.logger.info("[レジストリ] Chrome関連レジストリのクリーンアップ開始")
             
             # PowerShellスクリプトでレジストリクリーンアップ
-            powershell_script = """
+            powershell_script = r"""
             $registryPaths = @(
                 'HKCU:\Software\Google\Chrome\Profile',
                 'HKCU:\Software\Google\Chrome\UserData',
