@@ -46,6 +46,8 @@ class ProfiledChromeManager:
     ) -> webdriver.Chrome:
         """プロファイル作成→Chrome起動を一括実行（指数バックオフ付きリトライ機能付き）
         
+        Windows権限問題とBrowserMetrics削除エラーに対応した改善版。
+        
         Args:
             profile_name: プロファイル名
             force_recreate: プロファイルを強制再作成するか
@@ -57,6 +59,56 @@ class ProfiledChromeManager:
             webdriver.Chrome: Chrome WebDriverインスタンス
         """
         last_error = None
+        
+        # Windows環境でのプロファイル完全削除
+        def force_remove_profile(profile_path_str: str) -> bool:
+            """Windows環境でプロファイルを強制削除"""
+            import platform
+            if platform.system() != 'Windows':
+                return False
+                
+            try:
+                import subprocess
+                import time
+                
+                # takeownで所有権を取得
+                subprocess.run(
+                    f'takeown /F "{profile_path_str}" /R /D Y',
+                    shell=True,
+                    capture_output=True,
+                    timeout=10
+                )
+                
+                # icaclsでフルコントロール権限を付与
+                subprocess.run(
+                    f'icacls "{profile_path_str}" /grant Everyone:F /T',
+                    shell=True,
+                    capture_output=True,
+                    timeout=10
+                )
+                
+                # attribで読み取り専用属性を削除
+                subprocess.run(
+                    f'attrib -R "{profile_path_str}\\*.*" /S',
+                    shell=True,
+                    capture_output=True,
+                    timeout=10
+                )
+                
+                # rmdirで強制削除
+                result = subprocess.run(
+                    f'rmdir /S /Q "{profile_path_str}"',
+                    shell=True,
+                    capture_output=True,
+                    timeout=10
+                )
+                
+                time.sleep(0.5)  # 削除完了を待つ
+                return result.returncode == 0
+                
+            except Exception as e:
+                self.logger.warning(f"強制削除に失敗: {e}")
+                return False
         
         # まず通常のプロファイルで試行
         for attempt in range(max_retries):
@@ -72,16 +124,25 @@ class ProfiledChromeManager:
                     self.logger.info(f"リトライまで {backoff_time} 秒待機...")
                     time.sleep(backoff_time)
         
-        # 通常プロファイルで失敗した場合、プロファイルを削除して再作成
+        # 通常プロファイルで失敗した場合、強制削除して再作成
         if fallback_to_temp:
             self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、プロファイルを削除して再作成します。")
             try:
-                # 既存プロファイルを完全削除
+                # 既存プロファイルを強制削除
                 old_profile_path = self.base_profiles_dir / profile_name
                 if old_profile_path.exists():
-                    import shutil
-                    shutil.rmtree(old_profile_path)
-                    self.logger.info(f"古いプロファイルを削除しました: {old_profile_path}")
+                    # まずPythonで削除を試みる
+                    try:
+                        import shutil
+                        shutil.rmtree(old_profile_path)
+                        self.logger.info(f"古いプロファイルを削除しました: {old_profile_path}")
+                    except Exception as e:
+                        self.logger.warning(f"通常削除に失敗: {e}")
+                        # Windows環境で強制削除
+                        if force_remove_profile(str(old_profile_path)):
+                            self.logger.info(f"強制削除でプロファイルを削除しました: {old_profile_path}")
+                        else:
+                            self.logger.error(f"プロファイル削除に完全に失敗: {old_profile_path}")
                 
                 # 新しいプロファイルを作成
                 new_profile_path = self.create_profile(profile_name, force_recreate=True)
@@ -89,9 +150,44 @@ class ProfiledChromeManager:
                 
             except Exception as recreate_error:
                 self.logger.error(f"プロファイル再作成での起動も失敗: {recreate_error}")
-                raise ChromeLaunchError(
-                    f"プロファイル '{profile_name}' の削除・再作成に失敗。メイン: {last_error}、再作成: {recreate_error}"
-                )
+                
+                # 一時プロファイルにフォールバック
+                self.logger.warning(f"プロファイル '{profile_name}' が使用中のため、新しい一時プロファイルを作成します。")
+                try:
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    temp_profile_name = f"{profile_name}_temp_{timestamp}"
+                    
+                    # 一時プロファイルでの起動を3回まで試行
+                    for temp_attempt in range(3):
+                        try:
+                            # 既存の一時プロファイルがあれば削除
+                            temp_profile_path = self.base_profiles_dir / temp_profile_name
+                            if temp_profile_path.exists():
+                                if force_remove_profile(str(temp_profile_path)):
+                                    self.logger.info(f"既存の一時プロファイルを削除: {temp_profile_path}")
+                            
+                            new_temp_profile_path = self.create_profile(temp_profile_name, force_recreate=True)
+                            return self._launch_with_retries(new_temp_profile_path, max_retries=1, **chrome_options)
+                            
+                        except Exception as temp_error:
+                            self.logger.warning(f"プロファイル '{temp_profile_name}' での起動試行 {temp_attempt + 1}/3 が失敗: {temp_error}")
+                            if temp_attempt < 2:
+                                time.sleep(0.5)
+                            
+                            # 次の試行用に異なる名前を生成
+                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                            temp_profile_name = f"{profile_name}_temp_{timestamp}_{temp_attempt + 1}"
+                    
+                    # 一時プロファイルでも失敗
+                    raise ChromeLaunchError(
+                        f"プロファイル '{profile_name}' とすべての一時プロファイルでの起動に失敗。メイン: {last_error}、再作成: {recreate_error}"
+                    )
+                    
+                except Exception as temp_fallback_error:
+                    raise ChromeLaunchError(
+                        f"プロファイル '{profile_name}' の削除・再作成に失敗。メイン: {last_error}、再作成: {recreate_error}"
+                    )
         
         raise ChromeLaunchError(f"プロファイル '{profile_name}' の作成・起動に失敗: {last_error}")
     
@@ -654,7 +750,7 @@ class ProfiledChromeManager:
     def _cleanup_profile_locks(self, profile_path: str):
         """プロファイルディレクトリのロックファイルを強制的にクリーンアップ
         
-        Windows環境での権限問題に対応した強化版。
+        Windows権限問題とBrowserMetricsアクセス拒否に対応した改善版。
         """
         profile_dir = Path(profile_path)
         if not profile_dir.exists():
@@ -663,7 +759,93 @@ class ProfiledChromeManager:
         import platform
         is_windows = platform.system() == 'Windows'
         
-        # ロックファイルパターンを拡張
+        cleaned_files = []
+        
+        # Windows環境での強制削除
+        def force_remove_windows(file_path: Path):
+            """Windows環境でファイル/ディレクトリを強制削除"""
+            if not file_path.exists():
+                return True
+                
+            try:
+                if file_path.is_file():
+                    # ファイルの属性をクリア
+                    import stat
+                    try:
+                        file_path.chmod(stat.S_IWRITE)
+                    except:
+                        pass
+                    file_path.unlink()
+                    return True
+                elif file_path.is_dir():
+                    # ディレクトリの場合
+                    import shutil
+                    def handle_remove_readonly(func, path, exc):
+                        import stat
+                        import os
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    
+                    shutil.rmtree(str(file_path), onerror=handle_remove_readonly)
+                    return True
+            except:
+                pass
+                
+            # コマンドラインツールでの強制削除
+            if is_windows:
+                try:
+                    import subprocess
+                    if file_path.is_file():
+                        # delコマンドで強制削除
+                        result = subprocess.run(
+                            f'del /F /Q "{str(file_path)}"',
+                            shell=True,
+                            capture_output=True,
+                            timeout=3
+                        )
+                    else:
+                        # rmdirコマンドで強制削除
+                        result = subprocess.run(
+                            f'rmdir /S /Q "{str(file_path)}"',
+                            shell=True,
+                            capture_output=True,
+                            timeout=3
+                        )
+                    return result.returncode == 0
+                except:
+                    pass
+            
+            return False
+        
+        # 問題のあるディレクトリを優先的に削除
+        problem_dirs = [
+            profile_dir / 'BrowserMetrics',
+            profile_dir / 'Default' / 'BrowserMetrics',
+            profile_dir / 'ShaderCache',
+            profile_dir / 'Default' / 'ShaderCache',
+            profile_dir / 'Default' / 'Service Worker',
+            profile_dir / 'Default' / 'IndexedDB',
+        ]
+        
+        for problem_dir in problem_dirs:
+            if problem_dir.exists():
+                try:
+                    if is_windows:
+                        if force_remove_windows(problem_dir):
+                            cleaned_files.append(str(problem_dir))
+                            self.logger.debug(f"問題ディレクトリ削除（強制）: {problem_dir}")
+                    else:
+                        if problem_dir.is_dir():
+                            import shutil
+                            shutil.rmtree(str(problem_dir))
+                        else:
+                            problem_dir.unlink()
+                        cleaned_files.append(str(problem_dir))
+                        self.logger.debug(f"問題ディレクトリ削除: {problem_dir}")
+                except Exception as e:
+                    self.logger.debug(f"問題ディレクトリ削除失敗: {problem_dir}, エラー: {e}")
+        
+        # ロックファイルパターンを削除
         lock_patterns = [
             'Singleton*',
             '*.lock',
@@ -676,76 +858,26 @@ class ProfiledChromeManager:
             '.org.chromium.Chromium.*'  # Linux/Mac用
         ]
         
-        cleaned_files = []
-        
-        # Windows環境での強制削除関数
-        def force_remove_windows(file_path: Path):
-            """Windows環境でファイルを強制削除"""
-            if not file_path.exists():
-                return True
-                
-            try:
-                # まず通常の削除を試みる
-                if file_path.is_file():
-                    # 読み取り専用属性を解除
-                    import stat
-                    try:
-                        file_path.chmod(stat.S_IWRITE)
-                    except:
-                        pass
-                    file_path.unlink()
-                    return True
-            except:
-                pass
-                
-            # 通常削除が失敗した場合、コマンドラインツールを使用
-            if is_windows:
-                try:
-                    import subprocess
-                    # delコマンドで強制削除
-                    result = subprocess.run(
-                        f'del /F /Q "{str(file_path)}"',
-                        shell=True,
-                        capture_output=True,
-                        timeout=5
-                    )
-                    if result.returncode == 0:
-                        return True
-                except:
-                    pass
-                    
-                try:
-                    # PowerShellでの削除も試みる
-                    ps_cmd = f'Remove-Item -Path "{str(file_path)}" -Force -ErrorAction SilentlyContinue'
-                    subprocess.run(
-                        ['powershell', '-Command', ps_cmd],
-                        capture_output=True,
-                        timeout=5
-                    )
-                    return not file_path.exists()
-                except:
-                    pass
-            
-            return False
-        
-        # 各パターンに対してロックファイルを削除
         for pattern in lock_patterns:
             # トップレベルのファイル
-            for lock_file in profile_dir.glob(pattern):
-                try:
-                    if lock_file.is_file():
-                        if is_windows:
-                            if force_remove_windows(lock_file):
+            try:
+                for lock_file in profile_dir.glob(pattern):
+                    try:
+                        if lock_file.is_file():
+                            if is_windows:
+                                if force_remove_windows(lock_file):
+                                    cleaned_files.append(str(lock_file))
+                                    self.logger.debug(f"ロックファイル削除（強制）: {lock_file}")
+                            else:
+                                lock_file.unlink()
                                 cleaned_files.append(str(lock_file))
-                                self.logger.debug(f"ロックファイル削除（強制）: {lock_file}")
-                        else:
-                            lock_file.unlink()
-                            cleaned_files.append(str(lock_file))
-                            self.logger.debug(f"ロックファイル削除: {lock_file}")
-                except Exception as e:
-                    self.logger.warning(f"ロックファイル削除失敗: {lock_file}, エラー: {e}")
-                    
-            # サブディレクトリ内のファイル
+                                self.logger.debug(f"ロックファイル削除: {lock_file}")
+                    except Exception as e:
+                        self.logger.debug(f"ロックファイル削除失敗: {lock_file}, エラー: {e}")
+            except Exception:
+                pass
+                
+            # サブディレクトリ内のファイル（安全に実行）
             try:
                 for lock_file in profile_dir.glob(f"**/{pattern}"):
                     try:
@@ -782,7 +914,7 @@ class ProfiledChromeManager:
                         self.logger.debug(f"特定ロックファイル削除: {lock_file}")
         
         if cleaned_files:
-            self.logger.info(f"ロックファイルクリーンアップ完了: {len(cleaned_files)}個のファイルを削除")
+            self.logger.info(f"ロックファイルクリーンアップ完了: {len(cleaned_files)}個のファイル/ディレクトリを削除")
         else:
             self.logger.debug("削除すべきロックファイルは見つかりませんでした")
     
