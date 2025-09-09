@@ -20,15 +20,19 @@ PermissionError: [Errno 13] assume access denied (originated from ReadProcessMem
 ### 1. 自動クリーンアップスクリプトの使用（推奨）
 
 ```bash
-# シンプル版（推奨）
-run_with_cleanup.bat
-
-# デバッグモード
+# コマンドプロンプトから実行
 run_with_cleanup.bat --debug
 
+# PowerShellから実行する場合
+cmd /c "run_with_cleanup.bat --debug"
+
+# または相対パス指定
+.\run_with_cleanup.bat --debug
+
 # PowerShell版（詳細ログ）
-powershell -ExecutionPolicy Bypass -File run_with_cleanup.ps1
+powershell -ExecutionPolicy Bypass -File .\run_with_cleanup.ps1
 ```
+</=======
 
 これらのスクリプトは以下を自動実行します：
 - 特定プロファイルのChromeプロセスのみを終了（他のChromeに影響なし）
@@ -78,5 +82,16 @@ python -m reply_bot.check_login_status --debug
 1. **管理者権限で実行**: コマンドプロンプトを管理者として実行
 2. **ウイルス対策ソフトの除外**: プロジェクトフォルダを除外設定に追加
 3. **Chromeの完全終了**: タスクマネージャーで全Chromeプロセスを確認
+
+## Windowsタスクスケジューラでの実行
+
+バッチファイルはWindowsタスクスケジューラで動作します。詳細は `TASK_SCHEDULER_SETUP.md` を参照してください。
+
+### 推奨設定
+```
+プログラム/スクリプト: powershell.exe
+引数: -ExecutionPolicy Bypass -File "C:\\GenerativeAI\\Twitter_reply_02\\run_with_cleanup.ps1"
+開始場所: C:\\GenerativeAI\\Twitter_reply_02
+```
 
 詳細な技術情報は `CHROME_PROFILE_ERROR_ANALYSIS.md` を参照してください。

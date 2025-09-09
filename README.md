@@ -202,14 +202,16 @@ python -m reply_bot.add_user_preferences
 Windows環境でChromeプロファイルのロック問題を回避するため、自動クリーンアップスクリプトを使用することを推奨します：
 
 ```bash
-# バッチファイル版（簡易）
-run_with_cleanup.bat
+# コマンドプロンプトから実行（推奨）
+run_with_cleanup.bat --debug
+
+# PowerShellから実行する場合
+cmd /c "run_with_cleanup.bat --debug"
+# または
+.\run_with_cleanup.bat --debug
 
 # PowerShell版（詳細なログ付き）
-powershell -ExecutionPolicy Bypass -File run_with_cleanup.ps1
-
-# デバッグモードで実行
-run_with_cleanup.bat --debug
+powershell -ExecutionPolicy Bypass -File .\run_with_cleanup.ps1
 ```
 
 これらのスクリプトは以下を自動的に実行します：
