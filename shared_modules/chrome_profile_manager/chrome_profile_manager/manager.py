@@ -13,6 +13,8 @@ import platform
 import tempfile
 import uuid
 import re
+import glob
+import subprocess
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -246,148 +248,121 @@ class ProfiledChromeManager:
         max_retries: int = 3,
         **options
     ) -> webdriver.Chrome:
-        """指数バックオフ付きリトライでChromeを起動
+        """Chrome起動のリトライロジック（強化版）
         
         Args:
-            profile_path: プロファイルパス
+            profile_path: プロファイルディレクトリのパス
             max_retries: 最大リトライ回数
             **options: Chrome起動オプション
             
         Returns:
-            webdriver.Chrome: Chrome WebDriverインスタンス
+            webdriver.Chrome: 起動されたChromeドライバー
             
         Raises:
-            ChromeLaunchError: Chrome起動に失敗した場合
+            ChromeStartupError: すべての試行が失敗した場合
         """
-        last_error = None
+        original_profile_path = profile_path
+        last_exception = None
         
         for attempt in range(max_retries):
             try:
-                # より強力なクリーンアップ処理
-                # プロファイル特定のChromeプロセスのみを終了（改善版）
-                # 注意: 全Chromeプロセスを終了するのではなく、特定プロファイルのみ対象
-                import platform
+                if attempt > 0:
+                    self.logger.info(f"リトライまで {0.5 * attempt} 秒待機...")
+                    time.sleep(0.5 * attempt)
+                    
+                # 試行回数に応じて異なる戦略を採用
+                if attempt == 0:
+                    # 1回目: 通常のプロファイルパスで試行
+                    current_profile_path = profile_path
+                elif attempt == 1:
+                    # 2回目: プロファイルディレクトリを完全削除して再作成
+                    current_profile_path = self._recreate_profile_directory(profile_path)
+                else:
+                    # 3回目: タイムスタンプ付きの代替プロファイルを作成
+                    current_profile_path = self._create_alternative_profile(original_profile_path)
                 
-                # 対象プロファイルを使用しているプロセスを特定して終了
+                # プロファイル特定のクリーンアップを実行
                 self.logger.warning("[開始] プロファイル特定のクリーンアップ開始")
                 self._log_chrome_processes("クリーンアップ開始時")
                 try:
-                    killed_pids = self.kill_chrome_using_profile(profile_path, timeout=5)
+                    killed_pids = self.kill_chrome_using_profile(current_profile_path, timeout=5)
                     if killed_pids:
                         self.logger.info(f"プロファイル使用中のChromeプロセスを終了: PIDs={killed_pids}")
                         time.sleep(1)  # プロセス終了を待つ
-                        # プロセス終了後の確認
                         self.logger.warning("[確認] プロセス終了後の状態確認")
                         self._log_chrome_processes("プロセス終了後")
                 except Exception as e:
                     self.logger.warning(f"プロファイル特定のプロセス終了でエラー: {e}")
                 
                 # 追加のクリーンアップ（従来の処理も保持）
-                self._kill_existing_chrome_processes(profile_path)
+                self._kill_existing_chrome_processes(current_profile_path)
                 
-                # 3. プロファイルディレクトリ全体のロックファイルを強制削除
-                profile_dir = Path(profile_path)
-                if profile_dir.exists():
-                    # より包括的なロックファイル削除
-                    for pattern in ['Singleton*', '*.lock', 'lockfile*', 'parent.lock', '*/LOCK']:
-                        for lock_file in profile_dir.glob(pattern):
-                            try:
-                                if lock_file.is_file():
-                                    lock_file.unlink()
-                                    self.logger.debug(f"ロックファイル削除: {lock_file}")
-                            except Exception:
-                                pass
-                        for lock_file in profile_dir.glob(f"**/{pattern}"):
-                            try:
-                                if lock_file.is_file():
-                                    lock_file.unlink()
-                                    self.logger.debug(f"ロックファイル削除: {lock_file}")
-                            except Exception:
-                                pass
+                # より包括的なロックファイル削除
+                self._cleanup_profile_locks(current_profile_path)
                 
-                # 4. 通常のロックファイルクリーンアップも実行
-                self._cleanup_profile_locks(profile_path)
+                self.logger.warning(f"[タイミング1] ChromeDriver取得前のプロセス確認")
+                self._log_chrome_processes("[ChromeDriver取得前]")
                 
-                # 少し待機してからChrome起動
-                if attempt > 0:
-                    time.sleep(0.2)
-                
-                chrome_options = self._build_chrome_options(profile_path, **options)
-                # ChromeDriverのパスを取得（キャッシュ利用）
-                # ChromeDriver取得前のプロセス確認
-                self.logger.warning("[タイミング1] ChromeDriver取得前のプロセス確認")
-                self._log_chrome_processes("ChromeDriver取得前")
-                
+                # ChromeDriverのセットアップ
                 if not self._driver_path:
                     self.logger.info("ChromeDriverを初回インストール中...")
-                    # ChromeDriverManagerのインストール前に再度クリーンアップ
-                    # (ChromeDriverManagerがChromeを起動する可能性があるため)
                     self._driver_path = ChromeDriverManager().install()
                     self.logger.info(f"ChromeDriverパス: {self._driver_path}")
-                    # ChromeDriverManager後のプロセス確認（重要）
-                    self.logger.warning("[タイミング2] ChromeDriverManager.install()後のプロセス確認")
-                    self._log_chrome_processes("ChromeDriverManager後")
-                    # ChromeDriver取得後に再度プロファイル特定のクリーンアップ
+                    self.logger.warning(f"[タイミング2] ChromeDriverManager.install()後のプロセス確認")
+                    self._log_chrome_processes("[ChromeDriverManager後]")
                     try:
-                        killed_pids = self.kill_chrome_using_profile(profile_path, timeout=2)
+                        killed_pids = self.kill_chrome_using_profile(current_profile_path, timeout=2)
                         if killed_pids:
                             self.logger.info(f"ChromeDriver後のクリーンアップ: PIDs={killed_pids}")
                             time.sleep(0.5)
                     except Exception:
                         pass
                 
-                # ChromeDriver Service作成後のプロセス確認
                 service = Service(self._driver_path)
-                self.logger.warning("[タイミング3] Service作成後のプロセス確認")
-                self._log_chrome_processes("Service作成後")
+                self.logger.warning(f"[タイミング3] Service作成後のプロセス確認")
+                self._log_chrome_processes("[Service作成後]")
                 
-                # 実際のuser-data-dirをログ出力（デバッグ用）
-                absolute_profile_path = os.path.abspath(profile_path)
-                self.logger.info(f"[Chrome] user-data-dir = {absolute_profile_path}")
+                # Chrome起動オプションの設定
+                chrome_options = self._build_chrome_options(current_profile_path, **options)
+                self.logger.info(f"[Chrome] user-data-dir = {current_profile_path}")
                 
-                # 最終的なプロファイルロック確認
-                self._cleanup_profile_locks(profile_path)
+                # 最終プロセス確認とロックファイル削除
+                self._cleanup_profile_locks(current_profile_path)
                 
-                # WebDriver初期化直前のChrome��ロセス確認（重要）
-                self.logger.warning("[重要] WebDriver初期化直前のプロセス確認開始")
-                pre_init_chrome_processes = []
-                try:
-                    for proc in psutil.process_iter(['pid', 'name']):
-                        try:
-                            proc_info = proc.info
-                            name = (proc_info.get('name') or "").lower()
-                            if 'chrome' in name or 'chromedriver' in name:
-                                pre_init_chrome_processes.append(f"PID={proc.pid}, Name={name}")
-                        except Exception:
-                            pass
-                    if pre_init_chrome_processes:
-                        self.logger.error(f"[警告] WebDriver初期化前にChromeプロセスが検出されました: {pre_init_chrome_processes}")
-                        self.logger.error(f"[警告] これらのプロセスがプロファイル {profile_path} を使用している可能性があります")
-                    else:
-                        self.logger.info("[OK] WebDriver初期化前にChromeプロセスは存在しません")
-                except Exception as e:
-                    self.logger.warning(f"プロセスチェックエラー: {e}")
+                self.logger.warning(f"[重要] WebDriver初期化直前のプロセス確認開始")
+                if self._check_chrome_processes("[OK] WebDriver初期化前にChromeプロセスは存在しません"):
+                    self.logger.error(f"[危険] WebDriver初期化前にChromeプロセスが存在します")
+                    self._force_kill_all_chrome_processes()
+                    time.sleep(1)
                 
-                # WebDriver初期化直前に短い待機
-                time.sleep(0.3)
-                
+                # Chrome WebDriverの起動
                 self.logger.warning(f"[重要] webdriver.Chrome() 呼び出し開始: {time.time()}")
                 driver = webdriver.Chrome(service=service, options=chrome_options)
-                self.logger.warning(f"[重要] webdriver.Chrome() 呼び出し完了: {time.time()}")
                 
-                self.logger.info(f"Chrome起動成功: プロファイル={profile_path}")
+                self.logger.info(f"Chrome起動成功（試行 {attempt + 1}/{max_retries}）")
                 return driver
                 
             except Exception as e:
-                last_error = e
-                self.logger.error(f"Chrome起動エラー（試行 {attempt + 1}/{max_retries}）: {e}")
+                last_exception = e
+                self.logger.error(f"Chrome起動エラー（試行 {attempt + 1}/{max_retries}）: {str(e)}")
                 
-                if attempt < max_retries - 1:
-                    backoff_time = 0.5 * (2 ** attempt)
-                    self.logger.info(f"リトライまで {backoff_time} 秒待機...")
-                    time.sleep(backoff_time)
+                # プロセス強制終了を試行
+                try:
+                    self._force_kill_all_chrome_processes()
+                    time.sleep(1)
+                except Exception as cleanup_error:
+                    self.logger.warning(f"プロセス強制終了でエラー: {cleanup_error}")
         
-        raise ChromeLaunchError(f"Chrome起動に失敗（{max_retries}回試行）: {last_error}")
+        # すべてのリトライが失敗した場合、最後の手段として一時プロファイルを試行
+        self.logger.warning("[最終手段] 一時プロファイルでの起動を試行")
+        try:
+            return self._launch_with_temporary_profile(**options)
+        except Exception as temp_error:
+            self.logger.error(f"一時プロファイルでの起動も失敗: {temp_error}")
+        
+        raise ChromeLaunchError(
+            f"Chrome起動に{max_retries}回失敗しました。最後のエラー: {str(last_exception)}"
+        )
     
     def _create_unique_temp_profile(self, base_profile_name: str) -> str:
         """ユニークな一時プロファイルを作成
@@ -917,6 +892,279 @@ class ProfiledChromeManager:
             self.logger.info(f"ロックファイルクリーンアップ完了: {len(cleaned_files)}個のファイル/ディレクトリを削除")
         else:
             self.logger.debug("削除すべきロックファイルは見つかりませんでした")
+
+    def _recreate_profile_directory(self, profile_path: str) -> str:
+        """
+        プロファイルディレクトリを完全削除して再作成
+        
+        Args:
+            profile_path: 元のプロファイルパス
+            
+        Returns:
+            str: 再作成されたプロファイルパス
+        """
+        try:
+            self.logger.info(f"[プロファイル再作成] 完全リセット開始: {profile_path}")
+            
+            # レジストリと一時ファイルクリーンアップ
+            self._cleanup_chrome_registry()
+            self._cleanup_chrome_temp_files()
+            
+            if os.path.exists(profile_path):
+                # Windows環境での強制削除
+                if platform.system() == "Windows":
+                    try:
+                        # takeownとicaclsによる権限変更
+                        subprocess.run([
+                            "takeown", "/F", profile_path, "/R", "/D", "Y"
+                        ], capture_output=True, timeout=10)
+                        
+                        subprocess.run([
+                            "icacls", profile_path, "/grant", "Everyone:F", "/T"
+                        ], capture_output=True, timeout=10)
+                        
+                        subprocess.run([
+                            "attrib", "-R", "/S", profile_path + "\\*.*"
+                        ], capture_output=True, timeout=10)
+                        
+                        # rmdir による強制削除
+                        subprocess.run([
+                            "rmdir", "/S", "/Q", profile_path
+                        ], capture_output=True, timeout=15)
+                        
+                        self.logger.info(f"[成功] Windows権限変更による削除完了")
+                    except Exception as win_error:
+                        self.logger.warning(f"[Windows削除失敗] {win_error}")
+                        # Python標準ライブラリでのフォールバック
+                        shutil.rmtree(profile_path, ignore_errors=True)
+                else:
+                    shutil.rmtree(profile_path, ignore_errors=True)
+            
+            # ディレクトリの再作成
+            os.makedirs(profile_path, exist_ok=True)
+            self.logger.info(f"[成功] プロファイルディレクトリ再作成完了: {profile_path}")
+            
+            # 作成確認のため少し待機
+            time.sleep(0.5)
+            
+            return profile_path
+            
+        except Exception as e:
+            self.logger.error(f"[失敗] プロファイル再作成エラー: {e}")
+            return profile_path
+    
+    def _create_alternative_profile(self, original_path: str) -> str:
+        """
+        タイムスタンプ付きの代替プロファイルパスを作成
+        
+        Args:
+            original_path: 元のプロファイルパス
+            
+        Returns:
+            str: 代替プロファイルパス
+        """
+        try:
+            timestamp = int(time.time() * 1000)  # ミリ秒タイムスタンプ
+            pid = os.getpid()  # プロセスID
+            
+            # 元のパスの親ディレクトリを取得
+            parent_dir = os.path.dirname(original_path)
+            original_name = os.path.basename(original_path)
+            
+            # 代替パスを生成
+            alternative_path = os.path.join(parent_dir, f"{original_name}_alt_{timestamp}_{pid}")
+            
+            self.logger.info(f"[代替プロファイル] 作成: {alternative_path}")
+            
+            # ディレクトリ作成
+            os.makedirs(alternative_path, exist_ok=True)
+            
+            return alternative_path
+            
+        except Exception as e:
+            self.logger.error(f"[失敗] 代替プロファイル作成エラー: {e}")
+            return original_path
+    
+    def _force_kill_all_chrome_processes(self):
+        """
+        すべてのChromeプロセスを強制終了（緊急時用）
+        """
+        try:
+            self.logger.warning("[緊急措置] すべてのChromeプロセスを強制終了")
+            
+            if platform.system() == "Windows":
+                # taskkill による強制終了
+                subprocess.run([
+                    "taskkill", "/F", "/IM", "chrome.exe"
+                ], capture_output=True)
+                
+                subprocess.run([
+                    "taskkill", "/F", "/IM", "chromedriver.exe"
+                ], capture_output=True)
+                
+                # PowerShellによる詳細終了
+                powershell_cmd = """
+                Get-Process | Where-Object {$_.ProcessName -like '*chrome*'} | Stop-Process -Force
+                Get-Process | Where-Object {$_.MainWindowTitle -like '*Chrome*'} | Stop-Process -Force
+                """
+                subprocess.run([
+                    "powershell", "-Command", powershell_cmd
+                ], capture_output=True, timeout=10)
+            else:
+                subprocess.run(["pkill", "-f", "chrome"], capture_output=True)
+                subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True)
+            
+            time.sleep(2)  # プロセス終了の待機
+            self.logger.info("[完了] Chrome強制終了処理完了")
+            
+        except Exception as e:
+            self.logger.error(f"[失敗] Chrome強制終了エラー: {e}")
+    
+    def _launch_with_temporary_profile(self, **chrome_options) -> webdriver.Chrome:
+        """
+        最後の手段：一時プロファイルでの起動
+        
+        Args:
+            **chrome_options: Chrome起動オプション
+            
+        Returns:
+            webdriver.Chrome: 起動されたChromeドライバー
+        """
+        try:
+            import tempfile
+            
+            # 一時ディレクトリ作成
+            temp_profile_path = tempfile.mkdtemp(prefix="chrome_temp_profile_")
+            self.logger.info(f"[一時プロファイル] 作成: {temp_profile_path}")
+            
+            # ChromeDriverのセットアップ
+            service = Service(self._driver_path)
+            
+            # 一時プロファイル用のChrome起動オプション
+            temp_options = self._build_chrome_options(temp_profile_path, **chrome_options)
+            
+            # 追加の安定化オプション
+            temp_options.add_argument("--disable-features=VizDisplayCompositor")
+            temp_options.add_argument("--disable-gpu")
+            temp_options.add_argument("--disable-software-rasterizer")
+            temp_options.add_argument("--disable-background-timer-throttling")
+            temp_options.add_argument("--disable-backgrounding-occluded-windows")
+            temp_options.add_argument("--disable-renderer-backgrounding")
+            temp_options.add_argument("--disable-field-trial-config")
+            
+            self.logger.warning(f"[一時プロファイル] WebDriver起動開始")
+            driver = webdriver.Chrome(service=service, options=temp_options)
+            
+            self.logger.info(f"[成功] 一時プロファイルでのChrome起動完了")
+            return driver
+            
+        except Exception as e:
+            self.logger.error(f"[失敗] 一時プロファイル起動エラー: {e}")
+            raise
+    
+    def _cleanup_chrome_registry(self):
+        """
+        Windows環境でのChrome関連レジストリクリーンアップ
+        """
+        if platform.system() != "Windows":
+            return
+        
+        try:
+            self.logger.info("[レジストリ] Chrome関連レジストリのクリーンアップ開始")
+            
+            # PowerShellスクリプトでレジストリクリーンアップ
+            powershell_script = """
+            $registryPaths = @(
+                'HKCU:\Software\Google\Chrome\Profile',
+                'HKCU:\Software\Google\Chrome\UserData',
+                'HKCU:\Software\Chromium\Profile',
+                'HKCU:\Software\Chromium\UserData'
+            )
+            
+            foreach ($path in $registryPaths) {
+                if (Test-Path $path) {
+                    Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+                    Write-Host "Cleaned: $path"
+                }
+            }
+            """
+            
+            result = subprocess.run([
+                "powershell", "-Command", powershell_script
+            ], capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0:
+                self.logger.info("[成功] レジストリクリーンアップ完了")
+            else:
+                self.logger.warning(f"[警告] レジストリクリーンアップで警告: {result.stderr}")
+                
+        except Exception as e:
+            self.logger.error(f"[失敗] レジストリクリーンアップエラー: {e}")
+    
+    def _cleanup_chrome_temp_files(self):
+        """
+        Chrome関連一時ファイルのクリーンアップ
+        """
+        try:
+            self.logger.info("[一時ファイル] Chrome一時ファイルクリーンアップ開始")
+            
+            temp_patterns = [
+                os.path.join(os.environ.get('TEMP', ''), 'chrome*'),
+                os.path.join(os.environ.get('TEMP', ''), 'scoped_dir*'),
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'Crashpad'),
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Google', 'Chrome', 'User Data', 'lockfile')
+            ]
+            
+            import glob
+            for pattern in temp_patterns:
+                try:
+                    matches = glob.glob(pattern)
+                    for match in matches:
+                        if os.path.isdir(match):
+                            shutil.rmtree(match, ignore_errors=True)
+                        else:
+                            os.remove(match)
+                    if matches:
+                        self.logger.debug(f"[削除] {len(matches)}個のファイル/ディレクトリを削除: {pattern}")
+                except Exception:
+                    pass  # 一時ファイルの削除エラーは無視
+                    
+            self.logger.info("[完了] Chrome一時ファイルクリーンアップ完了")
+            
+        except Exception as e:
+            self.logger.error(f"[失敗] 一時ファイルクリーンアップエラー: {e}")
+    
+    def _check_chrome_processes(self, message: str = "") -> bool:
+        """
+        Chromeプロセスの存在確認
+        
+        Args:
+            message: ログメッセージ
+            
+        Returns:
+            bool: Chromeプロセスが存在する場合True
+        """
+        try:
+            chrome_processes = []
+            for proc in psutil.process_iter(['pid', 'name']):
+                try:
+                    proc_info = proc.info
+                    name = (proc_info.get('name') or "").lower()
+                    if 'chrome' in name or 'chromedriver' in name:
+                        chrome_processes.append(f"PID={proc.pid}, Name={name}")
+                except Exception:
+                    pass
+            
+            if chrome_processes:
+                self.logger.info(f"{message} Chrome関連プロセス検出: {chrome_processes}")
+                return True
+            else:
+                self.logger.info(f"{message} Chrome関連プロセスなし")
+                return False
+                
+        except Exception as e:
+            self.logger.warning(f"プロセスチェックエラー: {e}")
+            return False
     
     def _terminate_process_safely(self, process: psutil.Process, timeout: int = 10) -> None:
         """プロセスを安全に終了
