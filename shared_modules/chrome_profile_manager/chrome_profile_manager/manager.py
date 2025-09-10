@@ -1750,50 +1750,50 @@ class ProfiledChromeManager:
             
         return None
 
-def _get_fixed_chrome_version(self) -> Optional[str]:
-    """fixed_chromeディレクトリのChromeバージョンを取得
-    
-    Returns:
-        str: Chromeのバージョン文字列、取得失敗時はNone
-    """
-    try:
-        if not self._chrome_binary_path or not os.path.exists(self._chrome_binary_path):
-            self.logger.warning(f"Chrome実行ファイルが存在しません: {self._chrome_binary_path}")
-            return None
+    def _get_fixed_chrome_version(self) -> Optional[str]:
+        """fixed_chromeディレクトリのChromeバージョンを取得
         
-        import subprocess
-        import platform
-        
-        if platform.system() == "Windows":
-            # PowerShellを使用してファイルのバージョン情報を取得
-            cmd = f'powershell "(Get-ItemProperty \\"{self._chrome_binary_path}\\").VersionInfo.FileVersion"'
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
-            if result.returncode == 0:
-                version = result.stdout.strip()
-                if version:
-                    self.logger.info(f"fixed_chrome Chromeバージョン取得成功: {version}")
-                    return version
-        else:
-            # 非Windows環境での処理
-            try:
-                result = subprocess.run([self._chrome_binary_path, '--version'],
-                                      capture_output=True, text=True, timeout=10)
+        Returns:
+            str: Chromeのバージョン文字列、取得失敗時はNone
+        """
+        try:
+            if not self._chrome_binary_path or not os.path.exists(self._chrome_binary_path):
+                self.logger.warning(f"Chrome実行ファイルが存在しません: {self._chrome_binary_path}")
+                return None
+            
+            import subprocess
+            import platform
+            
+            if platform.system() == "Windows":
+                # PowerShellを使用してファイルのバージョン情報を取得
+                cmd = f'powershell "(Get-ItemProperty \\"{self._chrome_binary_path}\\").VersionInfo.FileVersion"'
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=10)
                 if result.returncode == 0:
-                    import re
-                    match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
-                    if match:
-                        version = match.group(1)
+                    version = result.stdout.strip()
+                    if version:
                         self.logger.info(f"fixed_chrome Chromeバージョン取得成功: {version}")
                         return version
-            except Exception as e:
-                self.logger.debug(f"chrome --version コマンド失敗: {e}")
-        
-        self.logger.warning("fixed_chrome Chromeバージョンの取得に失敗しました")
-        return None
-        
-    except Exception as e:
-        self.logger.error(f"fixed_chrome Chromeバージョン取得エラー: {e}")
-        return None
+            else:
+                # 非Windows環境での処理
+                try:
+                    result = subprocess.run([self._chrome_binary_path, '--version'],
+                                          capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        import re
+                        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                        if match:
+                            version = match.group(1)
+                            self.logger.info(f"fixed_chrome Chromeバージョン取得成功: {version}")
+                            return version
+                except Exception as e:
+                    self.logger.debug(f"chrome --version コマンド失敗: {e}")
+            
+            self.logger.warning("fixed_chrome Chromeバージョンの取得に失敗しました")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"fixed_chrome Chromeバージョン取得エラー: {e}")
+            return None
 
     def _check_version_compatibility(self, chrome_version: str, driver_version: str) -> Optional[str]:
         """ChromeとChromeDriverのバージョン互換性をチェック

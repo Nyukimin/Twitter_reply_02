@@ -43,9 +43,11 @@ def check_login(headless: bool = False):
         # 例：サイドナビゲーションにある「投稿する」ボタン
         login_indicator_selector = '[data-testid="SideNav_NewTweet_Button"]'
         
-        wait = WebDriverWait(driver, 15) # 待機時間を15秒に設定
+        # ログインのために長時間待機（5分）
+        wait = WebDriverWait(driver, 300) # 待機時間を300秒（5分）に設定
 
         logging.info(f"ログイン確認用の要素 ({login_indicator_selector}) が表示されるか待機します...")
+        logging.info("⏰ 手動でログインしてください。最大5分間お待ちします...")
 
         try:
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, login_indicator_selector)))
@@ -57,17 +59,18 @@ def check_login(headless: bool = False):
             logging.info(f"現在の画面のスクリーンショットを {screenshot_path} に保存しました。")
 
         except Exception:
-            logging.error(">>> ログイン失敗: 確認用要素が見つかりませんでした。")
+            logging.error(">>> ログイン失敗: 5分以内にログインが完了しませんでした。")
             logging.warning("ログインページにリダイレクトされているか、UIが変更された可能性があります。")
+            logging.info("💡 ヒント: ブラウザが表示されている間に手動でログインしてください。")
             
             # 失敗した時点でのスクリーンショットを保存
             screenshot_path = "login_failure_check.png"
             driver.save_screenshot(screenshot_path)
             logging.info(f"現在の画面のスクリーンショットを {screenshot_path} に保存しました。")
 
-        # 状態確認のために5秒間待機
-        logging.info("5秒後にブラウザを閉じます...")
-        time.sleep(5)
+        # ログイン完了後の確認のために10秒間待機
+        logging.info("10秒後にブラウザを閉じます...")
+        time.sleep(10)
 
     except Exception as e:
         logging.error(f"ログイン確認処理中に予期せぬエラーが発生しました: {e}", exc_info=True)

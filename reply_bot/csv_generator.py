@@ -8,6 +8,7 @@ import csv
 import pytz
 import argparse
 from pathlib import Path
+import random
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -37,7 +38,7 @@ def extract_text_with_emoji(element) -> str:
             result += str(child)
         elif isinstance(child, Tag):
             if child.name == "img" and child.has_attr("alt"):
-                result += child["alt"]
+                result += str(child["alt"])
             else:
                 result += extract_text_with_emoji(child)
     return result
@@ -48,12 +49,12 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
     """
     try:
         # ツイートID（リプライ自身のID）の抽出
-        reply_link_element = tweet_article.find('a', {'href': lambda href: href and '/status/' in href})
-        reply_full_url = reply_link_element['href'] if reply_link_element else None
+        reply_link_element = tweet_article.find('a', attrs={'href': re.compile(r'/status/')})
+        reply_full_url = reply_link_element.get('href') if reply_link_element else None
         
         reply_id = None
         if reply_full_url:
-            reply_id = reply_full_url.split('/')[-1]
+            reply_id = str(reply_full_url).split('/')[-1]
 
         if not reply_id or not reply_id.isdigit():
             logging.warning("有効なリプライIDが見つかりませんでした。スキップします。")
@@ -68,13 +69,13 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         display_name = ""
         user_name_div = tweet_article.find('div', {'data-testid': 'User-Name'})
         if user_name_div:
-            display_name_span = user_name_div.find('span', class_=lambda x: x and 'r-dnmrzs' in x and 'r-1udh08x' in x and 'r-1udbk01' in x and 'r-3s2u2q' in x)
+            display_name_span = user_name_div.find('span', class_=re.compile(r'r-dnmrzs.*r-1udh08x.*r-1udbk01.*r-3s2u2q'))
             if display_name_span:
                 display_name = extract_text_with_emoji(display_name_span).strip()
             
-            user_link = user_name_div.find('a', {'role': 'link', 'href': lambda href: href and href.startswith('/') and '/status/' not in href})
-            if user_link and 'href' in user_link.attrs:
-                replier_id = user_link['href'].lstrip('/')
+            user_link = user_name_div.find('a', href=re.compile(r'^/(?!status/).*'))
+            if user_link and user_link.has_attr('href'):
+                replier_id = user_link.get('href', '').lstrip('/')
 
         if not replier_id:
             logging.warning(f"リプライしたユーザーIDが見つかりませんでした。スキップします。リプライID: {reply_id}")
@@ -84,12 +85,14 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         time_element = tweet_article.find('time')
         tweet_datetime_utc = None
         tweet_datetime_jst = None
-        if time_element and 'datetime' in time_element.attrs:
+        if time_element and time_element.has_attr('datetime'):
             try:
-                tweet_datetime_utc = datetime.strptime(time_element['datetime'], '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
-                tweet_datetime_jst = tweet_datetime_utc.astimezone(jst)
+                datetime_str = time_element.get('datetime')
+                if datetime_str:
+                    tweet_datetime_utc = datetime.strptime(datetime_str, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+                    tweet_datetime_jst = tweet_datetime_utc.astimezone(jst)
             except ValueError as e:
-                logging.warning(f"日時解析エラー: {e} - datetime属性: {time_element['datetime']}")
+                logging.warning(f"日時解析エラー: {e} - datetime属性: {time_element.get('datetime')}")
                 return None
         
         if not tweet_datetime_jst:
@@ -98,11 +101,11 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
 
         # リプライ対象ユーザーIDの抽出
         reply_to_user = None
-        reply_context_element = tweet_article.find('div', class_=lambda x: x and 'r-4qtqp9' in x and 'r-zl2h9q' in x)
+        reply_context_element = tweet_article.find('div', class_=re.compile(r'r-4qtqp9.*r-zl2h9q'))
         if reply_context_element:
-            reply_to_link = reply_context_element.find('a', {'href': lambda href: href and href.startswith('/') and '/status/' not in href})
-            if reply_to_link and 'href' in reply_to_link.attrs:
-                reply_to_user = reply_to_link['href'].lstrip('/')
+            reply_to_link = reply_context_element.find('a', href=re.compile(r'^/(?!status/).*'))
+            if reply_to_link and reply_to_link.has_attr('href'):
+                reply_to_user = reply_to_link.get('href', '').lstrip('/')
 
         # スレッド起点判定
         is_my_thread = False
@@ -116,14 +119,16 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         like_num = 0
         
         reply_button = tweet_article.find('button', {'data-testid': 'reply'})
-        if reply_button and 'aria-label' in reply_button.attrs:
-            match = re.search(r'(\d+)\s*件の返信', reply_button['aria-label'])
+        if reply_button and reply_button.has_attr('aria-label'):
+            aria_label = reply_button.get('aria-label', '')
+            match = re.search(r'(\d+)\s*件の返信', aria_label)
             if match:
                 reply_num = int(match.group(1))
         
         like_button = tweet_article.find('button', {'data-testid': 'like'})
-        if like_button and 'aria-label' in like_button.attrs:
-            match = re.search(r'(\d+)\s*件のいいね', like_button['aria-label'])
+        if like_button and like_button.has_attr('aria-label'):
+            aria_label = like_button.get('aria-label', '')
+            match = re.search(r'(\d+)\s*件のいいね', aria_label)
             if match:
                 like_num = int(match.group(1))
 
@@ -135,7 +140,7 @@ def _extract_tweet_info(tweet_article: BeautifulSoup) -> dict | None:
         # 言語コードの抽出
         lang = 'und' # デフォルトは 'und'
         if content_element and content_element.has_attr('lang'):
-            lang = content_element['lang']
+            lang = content_element.get('lang', 'und')
 
         # 全ての文字列フィールドがNoneでないことを保証する
         final_replier_id = replier_id if replier_id is not None else ""
@@ -211,7 +216,7 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             # 1. home
             logging.info("[1/5] ホームページにアクセスします...")
             driver.get("https://x.com/home")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("ホームページの読み込み完了。")
@@ -219,7 +224,7 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             # 2. notifications
             logging.info("[2/5] 通知ページにアクセスします...")
             driver.get("https://x.com/notifications")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("通知ページの読み込み完了。")
@@ -227,22 +232,22 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             # 3. notifications/mentions
             logging.info("[3/5] 通知（メンション）ページにアクセスします...")
             driver.get("https://x.com/notifications/mentions")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("通知（メンション）ページの読み込み完了。")
-            time.sleep(5)  # 完全ロードを待機
+            time.sleep(random.uniform(4, 6))  # 完全ロードを待機
 
             # 4. notifications/mentions (again)
             logging.info("[4/5] 再度、通知（メンション）ページにアクセスします...")
             driver.get("https://x.com/notifications/mentions")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             # 4. notifications (again)
             logging.info("[4/5] 再度、通知ページにアクセスします...")
             driver.get("https://x.com/notifications")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("再度、通知ページの読み込み完了。")
@@ -250,7 +255,7 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             # 5. notifications/mentions (final)
             logging.info("[5/5] 最終的に通知（メンション）ページにアクセスします...")
             driver.get("https://x.com/notifications/mentions")
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("最終的な通知（メンション）ページの読み込み完了。")
@@ -258,7 +263,7 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             # 最新データを確実に取得するため、更新処理を実行
             logging.info("最新データ取得のためページの更新処理を実行します...")
             driver.refresh()
-            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS * 2).until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             logging.info("ページ更新完了。")
@@ -268,14 +273,14 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
             for i in range(3):
                 logging.info(f"初期スクロール {i+1}/3 回目...")
                 driver.execute_script("window.scrollTo(0, 0);")  # 最上部に移動
-                time.sleep(2)
+                time.sleep(random.uniform(1.5, 2.5))
                 driver.execute_script("window.scrollBy(0, 500);")  # 軽くスクロール
-                time.sleep(2)
+                time.sleep(random.uniform(1.5, 2.5))
                 driver.execute_script("window.scrollBy(0, -500);")  # 元に戻す
-                time.sleep(2)
+                time.sleep(random.uniform(1.5, 2.5))
             
             logging.info("最新ツイート確認のための最終待機中...")
-            time.sleep(10)  # 最新ツイートの完全ロードを待機
+            time.sleep(random.uniform(8, 12))  # 最新ツイートの完全ロードを待機
             
         except TimeoutException:
             logging.error(f"ナビゲーションシーケンス中にタイムアウトが発生しました（{PAGE_LOAD_TIMEOUT_SECONDS}秒）。処理を中断します。")
@@ -288,9 +293,9 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
         
         # 最新ツイートが確実に表示されるまで待機とチェック
         logging.info("最新ツイートの表示を確認中...")
-        max_wait_attempts = 10
+        max_wait_attempts = 1
         for attempt in range(max_wait_attempts):
-            time.sleep(3)
+            time.sleep(random.uniform(2.5, 3.5))
             current_source = driver.page_source
             soup_check = BeautifulSoup(current_source, 'html.parser')
             tweets_check = soup_check.find_all('article', {'data-testid': 'tweet'})
@@ -311,19 +316,12 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
                         logging.info("最新ツイートが確認できました。データ取得を続行します。")
                         break
                     else:
-                        logging.info(f"最新ツイートが古すぎます（{time_diff}）。再試行します...")
-                        if attempt < max_wait_attempts - 1:
-                            driver.refresh()
-                            time.sleep(3)
-                            continue
-                        else:
-                            logging.warning("最新ツイートの取得に失敗しました。古いデータで処理を続行します。")
-                            break
+                        logging.warning(f"最新ツイートが古すぎます（{time_diff}）。処理を続行します。")
+                        break # 試行回数に関わらず、古ければ次の処理に進む
             
-            if attempt == max_wait_attempts - 1:
-                logging.warning("最新ツイートの確認に失敗しました。処理を続行します。")
+            logging.warning("最新ツイートの確認に失敗しました。処理を続行します。")
         
-        time.sleep(2)  # 最終的な安定化待機
+        time.sleep(random.uniform(1.5, 2.5))  # 最終的な安定化待機
         
         # 0ページ目のHTMLソースを保存
         initial_html_source = driver.page_source
@@ -423,7 +421,7 @@ def main_process(driver: webdriver.Chrome, output_csv_path: str, max_scrolls: in
 
             # 現在のスクロール位置から指定量スクロール
             driver.execute_script(f"window.scrollBy(0, {scroll_by});")
-            time.sleep(5) # スクロール後のコンテンツロードを待つ (5秒に延長)
+            time.sleep(random.uniform(4, 6)) # スクロール後のコンテンツロードを待つ (5秒に延長)
             
             new_height = driver.execute_script("return document.body.scrollHeight")
             
